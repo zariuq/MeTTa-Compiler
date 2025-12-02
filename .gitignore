@@ -4,3 +4,4 @@ perf.data
 perf.data.*
 *.perf.data
 flamegraph*.svg
+*.md
