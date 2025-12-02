@@ -1187,6 +1187,79 @@ impl Environment {
         self.modified.store(true, Ordering::Release);
     }
 
+    /// Remove a fact from a named space (PeTTa-style)
+    /// If space_name is "self", removes from the main btm
+    /// Otherwise, removes from the named space (no-op if space doesn't exist)
+    pub fn remove_from_named_space(&mut self, space_name: &str, value: &MettaValue) {
+        use crate::backend::mork_convert::{metta_to_mork_bytes, ConversionContext};
+
+        // Special case: "self" refers to main btm
+        if space_name == "self" {
+            // For main btm, we need to get a write lock and remove
+            let mork_str = value.to_mork_string();
+            let mork_bytes = mork_str.as_bytes();
+
+            // Try direct MORK byte conversion for ground values
+            let is_ground = !Self::contains_variables(value);
+            if is_ground {
+                let btm_read = self.btm.read().unwrap();
+                let space = Space {
+                    btm: btm_read.clone(),
+                    sm: self.shared_mapping.clone(),
+                    mmaps: HashMap::new(),
+                };
+                drop(btm_read);
+
+                let mut ctx = ConversionContext::new();
+
+                if let Ok(mork_bytes_direct) = metta_to_mork_bytes(value, &space, &mut ctx) {
+                    // Use PathMap's mutable remove method with write lock
+                    let mut btm_write = self.btm.write().unwrap();
+                    btm_write.remove(&mork_bytes_direct);
+                    drop(btm_write);
+                    self.modified.store(true, Ordering::Release);
+                    return;
+                }
+            }
+
+            // Fallback: use string path for removal with write lock
+            let mut btm_write = self.btm.write().unwrap();
+            btm_write.remove(mork_bytes);
+            drop(btm_write);
+            self.modified.store(true, Ordering::Release);
+            return;
+        }
+
+        // For named spaces, remove from the HashMap entry
+        let mork_str = value.to_mork_string();
+        let mork_bytes = mork_str.as_bytes();
+        let is_ground = !Self::contains_variables(value);
+
+        let mut spaces = self.named_spaces.write().unwrap();
+        if let Some(space_map) = spaces.get_mut(space_name) {
+            if is_ground {
+                // Ground values: try direct MORK byte conversion
+                let space = Space {
+                    btm: space_map.clone(),
+                    sm: self.shared_mapping.clone(),
+                    mmaps: HashMap::new(),
+                };
+                let mut ctx = ConversionContext::new();
+
+                if let Ok(mork_bytes_direct) = metta_to_mork_bytes(value, &space, &mut ctx) {
+                    space_map.remove(&mork_bytes_direct);
+                    self.modified.store(true, Ordering::Release);
+                    return;
+                }
+            }
+
+            // Fallback: use string path
+            space_map.remove(mork_bytes);
+            self.modified.store(true, Ordering::Release);
+        }
+        // If space doesn't exist, it's a no-op
+    }
+
     /// Match in a named space (PeTTa-style)
     /// If space_name is "self", matches in the main btm
     /// Otherwise, matches in the named space (returns empty if space doesn't exist)

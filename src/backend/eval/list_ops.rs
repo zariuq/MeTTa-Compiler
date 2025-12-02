@@ -446,6 +446,98 @@ pub(super) fn eval_decons_atom(items: Vec<MettaValue>, env: Environment) -> Eval
     }
 }
 
+/// size-atom: Get the number of atoms in an expression
+/// Usage: (size-atom expr) → count
+/// Example: (size-atom (a b c)) → 3
+pub(super) fn eval_size_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    require_args_with_usage!("size-atom", items, 1, env, "(size-atom expr)");
+    let expr = &items[1];
+
+    let count = match expr {
+        MettaValue::SExpr(atoms) => atoms.len() as i64,
+        MettaValue::Nil => 0,
+        // For non-list values, size is 1 (the atom itself)
+        _ => 1,
+    };
+
+    (vec![MettaValue::Long(count)], env)
+}
+
+/// max-atom: Find the maximum value in a list of numbers
+/// Usage: (max-atom list) → maximum
+/// Example: (max-atom (1 5 3 9 2)) → 9
+pub(super) fn eval_max_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    require_args_with_usage!("max-atom", items, 1, env, "(max-atom list)");
+    let list = &items[1];
+
+    match list {
+        MettaValue::SExpr(elements) if !elements.is_empty() => {
+            // Extract all numeric values
+            let mut numbers = Vec::new();
+            for elem in elements {
+                match elem {
+                    MettaValue::Long(n) => numbers.push(*n as f64),
+                    MettaValue::Float(f) => numbers.push(*f),
+                    _ => {
+                        let err = MettaValue::Error(
+                            format!(
+                                "max-atom: all elements must be numbers, got: {}",
+                                super::friendly_value_repr(elem)
+                            ),
+                            Arc::new(list.clone()),
+                        );
+                        return (vec![err], env);
+                    }
+                }
+            }
+
+            if numbers.is_empty() {
+                let err = MettaValue::Error(
+                    "max-atom: list must contain at least one number".to_string(),
+                    Arc::new(list.clone()),
+                );
+                return (vec![err], env);
+            }
+
+            // Find maximum
+            let max = numbers
+                .iter()
+                .fold(f64::NEG_INFINITY, |acc, &x| if x > acc { x } else { acc });
+
+            // Return as appropriate type
+            if max.fract() == 0.0 && max.is_finite() {
+                (vec![MettaValue::Long(max as i64)], env)
+            } else {
+                (vec![MettaValue::Float(max)], env)
+            }
+        }
+        MettaValue::SExpr(_) => {
+            let err = MettaValue::Error(
+                "max-atom: list is empty".to_string(),
+                Arc::new(list.clone()),
+            );
+            (vec![err], env)
+        }
+        MettaValue::Nil => {
+            let err = MettaValue::Error(
+                "max-atom: cannot find maximum of empty list".to_string(),
+                Arc::new(MettaValue::Nil),
+            );
+            (vec![err], env)
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!(
+                    "max-atom: expected a list, got {}. Usage: (max-atom list)",
+                    super::friendly_value_repr(list)
+                ),
+                Arc::new(list.clone()),
+            );
+            (vec![err], env)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

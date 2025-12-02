@@ -155,6 +155,62 @@ pub(super) fn eval_add_atom(items: Vec<MettaValue>, env: Environment) -> EvalRes
     }
 }
 
+/// Remove atom from a space: (remove-atom &space-name atom)
+/// PeTTa-style: removes the atom from the named space
+pub(super) fn eval_remove_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() < 3 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "remove-atom requires exactly 3 arguments, got {}. Usage: (remove-atom & space-name atom)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let space_ref = &args[0];
+    let space_name = &args[1];
+    let atom = &args[2];
+
+    // Check that first arg is & (space reference operator)
+    match space_ref {
+        MettaValue::Atom(s) if s == "&" => {
+            // Get space name
+            match space_name {
+                MettaValue::Atom(name) => {
+                    let mut new_env = env.clone();
+                    new_env.remove_from_named_space(name, atom);
+                    (vec![], new_env) // Return empty (side effect operation)
+                }
+                _ => {
+                    let err = MettaValue::Error(
+                        format!(
+                            "remove-atom: space name must be an atom, got: {}",
+                            super::friendly_value_repr(space_name)
+                        ),
+                        Arc::new(MettaValue::SExpr(args.to_vec())),
+                    );
+                    (vec![err], env)
+                }
+            }
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!(
+                    "remove-atom requires & as first argument, got: {}",
+                    super::friendly_value_repr(space_ref)
+                ),
+                Arc::new(MettaValue::SExpr(args.to_vec())),
+            );
+            (vec![err], env)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -111,6 +111,8 @@ const SPECIAL_FORMS: &[&str] = &[
     "map-atom",
     "filter-atom",
     "foldl-atom",
+    "size-atom",
+    "max-atom",
 ];
 
 /// Convert MettaValue to a friendly type name for error messages
@@ -492,6 +494,9 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "cons-atom" => return EvalStep::Done(list_ops::eval_cons_atom(items, env)),
             "decons-atom" => return EvalStep::Done(list_ops::eval_decons_atom(items, env)),
             "add-atom" => return EvalStep::Done(space::eval_add_atom(items, env)),
+            "remove-atom" => return EvalStep::Done(space::eval_remove_atom(items, env)),
+            "size-atom" => return EvalStep::Done(list_ops::eval_size_atom(items, env)),
+            "max-atom" => return EvalStep::Done(list_ops::eval_max_atom(items, env)),
             _ => {}
         }
     }
