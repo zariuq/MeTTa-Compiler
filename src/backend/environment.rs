@@ -78,6 +78,12 @@ pub struct Environment {
     /// Causes type_index to be rebuilt on next get_type() call
     /// RwLock allows concurrent checks of dirty flag
     type_index_dirty: Arc<RwLock<bool>>,
+
+    /// Named spaces: PeTTa-style auto-creating spaces
+    /// Maps space name -> PathMap for O(1) clause indexing
+    /// "self" always refers to the main btm
+    /// RwLock allows concurrent reads during parallel space operations
+    named_spaces: Arc<RwLock<HashMap<String, PathMap<()>>>>,
 }
 
 impl Environment {
@@ -96,6 +102,7 @@ impl Environment {
             fuzzy_matcher: FuzzyMatcher::new(),
             type_index: Arc::new(RwLock::new(None)),
             type_index_dirty: Arc::new(RwLock::new(true)),
+            named_spaces: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -1131,6 +1138,106 @@ impl Environment {
         self.update_pathmap(space);
     }
 
+    /// Add a fact to a named space (PeTTa-style auto-creating spaces)
+    /// If space_name is "self", adds to the main btm
+    /// Otherwise, adds to the named space (auto-creates if doesn't exist)
+    pub fn add_to_named_space(&mut self, space_name: &str, value: &MettaValue) {
+        use crate::backend::mork_convert::{metta_to_mork_bytes, ConversionContext};
+
+        // Special case: "self" refers to main btm
+        if space_name == "self" {
+            self.add_to_space(value);
+            return;
+        }
+
+        // Auto-create or get existing space
+        let is_ground = !Self::contains_variables(value);
+        let mork_str = value.to_mork_string();
+        let mork_bytes = mork_str.as_bytes();
+
+        let mut spaces = self.named_spaces.write().unwrap();
+        let space_map = spaces.entry(space_name.to_string()).or_insert_with(PathMap::new);
+
+        if is_ground {
+            // Ground values: try direct MORK byte conversion
+            let space = Space {
+                btm: space_map.clone(),
+                sm: self.shared_mapping.clone(),
+                mmaps: HashMap::new(),
+            };
+            let mut ctx = ConversionContext::new();
+
+            if let Ok(mork_bytes_direct) = metta_to_mork_bytes(value, &space, &mut ctx) {
+                space_map.insert(&mork_bytes_direct, ());
+                return;
+            }
+        }
+
+        // Fallback: use string path
+        let mut space = Space {
+            btm: space_map.clone(),
+            sm: self.shared_mapping.clone(),
+            mmaps: HashMap::new(),
+        };
+
+        if let Ok(_count) = space.load_all_sexpr_impl(mork_bytes, true) {
+            *space_map = space.btm;
+        }
+
+        self.modified.store(true, Ordering::Release);
+    }
+
+    /// Match in a named space (PeTTa-style)
+    /// If space_name is "self", matches in the main btm
+    /// Otherwise, matches in the named space (returns empty if space doesn't exist)
+    pub fn match_named_space(
+        &self,
+        space_name: &str,
+        pattern: &MettaValue,
+        template: &MettaValue,
+    ) -> Vec<MettaValue> {
+        use crate::backend::eval::{apply_bindings, pattern_match};
+
+        // Special case: "self" refers to main btm
+        if space_name == "self" {
+            return self.match_space(pattern, template);
+        }
+
+        // Get the named space (return empty if doesn't exist)
+        let spaces = self.named_spaces.read().unwrap();
+        let space_map = match spaces.get(space_name) {
+            Some(map) => map.clone(),
+            None => return vec![], // Space doesn't exist yet
+        };
+        drop(spaces);
+
+        // Create a Space for iteration
+        let space = Space {
+            btm: space_map,
+            sm: self.shared_mapping.clone(),
+            mmaps: HashMap::new(),
+        };
+
+        let mut rz = space.btm.read_zipper();
+        let mut results = Vec::new();
+
+        // Iterate through all values in the space
+        while rz.to_next_val() {
+            let expr = mork_expr::Expr {
+                ptr: rz.path().as_ptr().cast_mut(),
+            };
+
+            if let Ok(atom) = Self::mork_expr_to_metta_value(&expr, &space) {
+                if let Some(bindings) = pattern_match(pattern, &atom) {
+                    let instantiated = apply_bindings(template, &bindings);
+                    results.push(instantiated);
+                }
+            }
+        }
+
+        results
+    }
+
     /// Bulk insert facts into MORK Space using PathMap anamorphism (Strategy 2)
     /// This is significantly faster than individual add_to_space() calls
     /// for large batches (3× speedup) due to:
@@ -1296,6 +1403,7 @@ impl Environment {
             fuzzy_matcher,
             type_index,
             type_index_dirty,
+            named_spaces: Arc::clone(&self.named_spaces),
         }
     }
 }
@@ -1316,6 +1424,7 @@ impl Clone for Environment {
             fuzzy_matcher: self.fuzzy_matcher.clone(),
             type_index: Arc::clone(&self.type_index),
             type_index_dirty: Arc::clone(&self.type_index_dirty),
+            named_spaces: Arc::clone(&self.named_spaces),
         }
     }
 }

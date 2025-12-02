@@ -67,33 +67,21 @@ pub(super) fn eval_match(items: Vec<MettaValue>, env: Environment) -> EvalResult
     // Check that first arg is & (space reference operator)
     match space_ref {
         MettaValue::Atom(s) if s == "&" => {
-            // Check space name (for now, only support "self")
+            // Accept any space name (PeTTa-style)
             match space_name {
-                MettaValue::Atom(name) if name == "self" => {
-                    // Use optimized match_space method that works directly with MORK
-                    let results = env.match_space(pattern, template);
+                MettaValue::Atom(name) => {
+                    // Use match_named_space which auto-handles "self" and other spaces
+                    let results = env.match_named_space(name, pattern, template);
                     (results, env)
                 }
                 _ => {
-                    // Try to suggest a valid space name
-                    let name_str = match space_name {
-                        MettaValue::Atom(s) => s.as_str(),
-                        _ => "",
-                    };
-
-                    let suggestion = suggest_space_name(name_str);
-                    let msg = match suggestion {
-                        Some(s) => format!(
-                            "match only supports 'self' as space name, got: {:?}. {}",
-                            space_name, s
+                    let err = MettaValue::Error(
+                        format!(
+                            "match: space name must be an atom, got: {}",
+                            super::friendly_value_repr(space_name)
                         ),
-                        None => format!(
-                            "match only supports 'self' as space name, got: {:?}",
-                            space_name
-                        ),
-                    };
-
-                    let err = MettaValue::Error(msg, Arc::new(MettaValue::SExpr(args.to_vec())));
+                        Arc::new(MettaValue::SExpr(args.to_vec())),
+                    );
                     (vec![err], env)
                 }
             }
@@ -102,6 +90,62 @@ pub(super) fn eval_match(items: Vec<MettaValue>, env: Environment) -> EvalResult
             let err = MettaValue::Error(
                 format!(
                     "match requires & as first argument, got: {}",
+                    super::friendly_value_repr(space_ref)
+                ),
+                Arc::new(MettaValue::SExpr(args.to_vec())),
+            );
+            (vec![err], env)
+        }
+    }
+}
+
+/// Add atom to a space: (add-atom &space-name atom)
+/// PeTTa-style: auto-creates space if it doesn't exist
+pub(super) fn eval_add_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() < 3 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "add-atom requires exactly 3 arguments, got {}. Usage: (add-atom & space-name atom)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let space_ref = &args[0];
+    let space_name = &args[1];
+    let atom = &args[2];
+
+    // Check that first arg is & (space reference operator)
+    match space_ref {
+        MettaValue::Atom(s) if s == "&" => {
+            // Get space name
+            match space_name {
+                MettaValue::Atom(name) => {
+                    let mut new_env = env.clone();
+                    new_env.add_to_named_space(name, atom);
+                    (vec![], new_env) // Return empty (side effect operation)
+                }
+                _ => {
+                    let err = MettaValue::Error(
+                        format!(
+                            "add-atom: space name must be an atom, got: {}",
+                            super::friendly_value_repr(space_name)
+                        ),
+                        Arc::new(MettaValue::SExpr(args.to_vec())),
+                    );
+                    (vec![err], env)
+                }
+            }
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!(
+                    "add-atom requires & as first argument, got: {}",
                     super::friendly_value_repr(space_ref)
                 ),
                 Arc::new(MettaValue::SExpr(args.to_vec())),

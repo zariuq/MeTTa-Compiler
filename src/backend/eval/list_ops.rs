@@ -326,6 +326,126 @@ fn substitute_variable(expr: &MettaValue, var_name: &str, value: &MettaValue) ->
     }
 }
 
+/// car-atom: Get the first element of an expression
+/// Usage: (car-atom (a b c)) → a
+pub(super) fn eval_car_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    require_args_with_usage!("car-atom", items, 1, env, "(car-atom expr)");
+
+    let expr = &items[1];
+
+    match expr {
+        MettaValue::SExpr(atoms) if !atoms.is_empty() => {
+            (vec![atoms[0].clone()], env)
+        }
+        MettaValue::SExpr(_) => {
+            let err = MettaValue::Error(
+                "car-atom: expression is empty".to_string(),
+                Arc::new(expr.clone())
+            );
+            (vec![err], env)
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!("car-atom: expected expression, got {}", super::friendly_value_repr(expr)),
+                Arc::new(expr.clone())
+            );
+            (vec![err], env)
+        }
+    }
+}
+
+/// cdr-atom: Get the rest of the expression (all but first element)
+/// Usage: (cdr-atom (a b c)) → (b c)
+pub(super) fn eval_cdr_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    require_args_with_usage!("cdr-atom", items, 1, env, "(cdr-atom expr)");
+
+    let expr = &items[1];
+
+    match expr {
+        MettaValue::SExpr(atoms) if atoms.len() > 1 => {
+            (vec![MettaValue::SExpr(atoms[1..].to_vec())], env)
+        }
+        MettaValue::SExpr(atoms) if atoms.len() == 1 => {
+            (vec![MettaValue::SExpr(vec![])], env)
+        }
+        MettaValue::SExpr(_) => {
+            let err = MettaValue::Error(
+                "cdr-atom: expression is empty".to_string(),
+                Arc::new(expr.clone())
+            );
+            (vec![err], env)
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!("cdr-atom: expected expression, got {}", super::friendly_value_repr(expr)),
+                Arc::new(expr.clone())
+            );
+            (vec![err], env)
+        }
+    }
+}
+
+/// cons-atom: Build an expression from head and tail
+/// Usage: (cons-atom a (b c)) → (a b c)
+pub(super) fn eval_cons_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    require_args_with_usage!("cons-atom", items, 2, env, "(cons-atom head tail)");
+
+    let head = items[1].clone();
+    let tail = &items[2];
+
+    match tail {
+        MettaValue::SExpr(atoms) => {
+            let mut result = vec![head];
+            result.extend(atoms.clone());
+            (vec![MettaValue::SExpr(result)], env)
+        }
+        MettaValue::Nil => {
+            (vec![MettaValue::SExpr(vec![head])], env)
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!("cons-atom: tail must be expression or Nil, got {}", super::friendly_value_repr(tail)),
+                Arc::new(tail.clone())
+            );
+            (vec![err], env)
+        }
+    }
+}
+
+/// decons-atom: Split an expression into head and tail
+/// Usage: (decons-atom (a b c)) → (a (b c))
+pub(super) fn eval_decons_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    require_args_with_usage!("decons-atom", items, 1, env, "(decons-atom expr)");
+
+    let expr = &items[1];
+
+    match expr {
+        MettaValue::SExpr(atoms) if !atoms.is_empty() => {
+            let head = atoms[0].clone();
+            let tail = if atoms.len() > 1 {
+                MettaValue::SExpr(atoms[1..].to_vec())
+            } else {
+                MettaValue::SExpr(vec![])
+            };
+            (vec![MettaValue::SExpr(vec![head, tail])], env)
+        }
+        MettaValue::SExpr(_) => {
+            let err = MettaValue::Error(
+                "decons-atom: expression is empty".to_string(),
+                Arc::new(expr.clone())
+            );
+            (vec![err], env)
+        }
+        _ => {
+            let err = MettaValue::Error(
+                format!("decons-atom: expected expression, got {}", super::friendly_value_repr(expr)),
+                Arc::new(expr.clone())
+            );
+            (vec![err], env)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1691,6 +1811,375 @@ mod tests {
                 );
             }
             _ => panic!("Expected error without suggestion"),
+        }
+    }
+
+    // === Tests for car-atom, cdr-atom, cons-atom, decons-atom ===
+
+    #[test]
+    fn test_car_atom_basic() {
+        let env = Environment::new();
+
+        // (car-atom (a b c)) → a
+        let items = vec![
+            MettaValue::Atom("car-atom".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("a".to_string()),
+                MettaValue::Atom("b".to_string()),
+                MettaValue::Atom("c".to_string()),
+            ]),
+        ];
+
+        let (results, _) = eval_car_atom(items, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Atom("a".to_string()));
+    }
+
+    #[test]
+    fn test_car_atom_single_element() {
+        let env = Environment::new();
+
+        // (car-atom (hello)) → hello
+        let items = vec![
+            MettaValue::Atom("car-atom".to_string()),
+            MettaValue::SExpr(vec![MettaValue::Atom("hello".to_string())]),
+        ];
+
+        let (results, _) = eval_car_atom(items, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Atom("hello".to_string()));
+    }
+
+    #[test]
+    fn test_car_atom_empty_error() {
+        let env = Environment::new();
+
+        // (car-atom ()) → Error
+        let items = vec![
+            MettaValue::Atom("car-atom".to_string()),
+            MettaValue::SExpr(vec![]),
+        ];
+
+        let (results, _) = eval_car_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("empty"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected error for empty expression"),
+        }
+    }
+
+    #[test]
+    fn test_car_atom_non_expr_error() {
+        let env = Environment::new();
+
+        // (car-atom 42) → Error
+        let items = vec![
+            MettaValue::Atom("car-atom".to_string()),
+            MettaValue::Long(42),
+        ];
+
+        let (results, _) = eval_car_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("expected expression"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected error for non-expression"),
+        }
+    }
+
+    #[test]
+    fn test_cdr_atom_basic() {
+        let env = Environment::new();
+
+        // (cdr-atom (a b c)) → (b c)
+        let items = vec![
+            MettaValue::Atom("cdr-atom".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("a".to_string()),
+                MettaValue::Atom("b".to_string()),
+                MettaValue::Atom("c".to_string()),
+            ]),
+        ];
+
+        let (results, _) = eval_cdr_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], MettaValue::Atom("b".to_string()));
+                assert_eq!(items[1], MettaValue::Atom("c".to_string()));
+            }
+            _ => panic!("Expected S-expression result"),
+        }
+    }
+
+    #[test]
+    fn test_cdr_atom_single_element() {
+        let env = Environment::new();
+
+        // (cdr-atom (a)) → ()
+        let items = vec![
+            MettaValue::Atom("cdr-atom".to_string()),
+            MettaValue::SExpr(vec![MettaValue::Atom("a".to_string())]),
+        ];
+
+        let (results, _) = eval_cdr_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 0);
+            }
+            _ => panic!("Expected empty S-expression"),
+        }
+    }
+
+    #[test]
+    fn test_cdr_atom_empty_error() {
+        let env = Environment::new();
+
+        // (cdr-atom ()) → Error
+        let items = vec![
+            MettaValue::Atom("cdr-atom".to_string()),
+            MettaValue::SExpr(vec![]),
+        ];
+
+        let (results, _) = eval_cdr_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("empty"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected error for empty expression"),
+        }
+    }
+
+    #[test]
+    fn test_cons_atom_basic() {
+        let env = Environment::new();
+
+        // (cons-atom a (b c)) → (a b c)
+        let items = vec![
+            MettaValue::Atom("cons-atom".to_string()),
+            MettaValue::Atom("a".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("b".to_string()),
+                MettaValue::Atom("c".to_string()),
+            ]),
+        ];
+
+        let (results, _) = eval_cons_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], MettaValue::Atom("a".to_string()));
+                assert_eq!(items[1], MettaValue::Atom("b".to_string()));
+                assert_eq!(items[2], MettaValue::Atom("c".to_string()));
+            }
+            _ => panic!("Expected S-expression result"),
+        }
+    }
+
+    #[test]
+    fn test_cons_atom_empty_tail() {
+        let env = Environment::new();
+
+        // (cons-atom a ()) → (a)
+        let items = vec![
+            MettaValue::Atom("cons-atom".to_string()),
+            MettaValue::Atom("a".to_string()),
+            MettaValue::SExpr(vec![]),
+        ];
+
+        let (results, _) = eval_cons_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0], MettaValue::Atom("a".to_string()));
+            }
+            _ => panic!("Expected single-element S-expression"),
+        }
+    }
+
+    #[test]
+    fn test_cons_atom_with_nil() {
+        let env = Environment::new();
+
+        // (cons-atom first Nil) → (first)
+        let items = vec![
+            MettaValue::Atom("cons-atom".to_string()),
+            MettaValue::Atom("first".to_string()),
+            MettaValue::Nil,
+        ];
+
+        let (results, _) = eval_cons_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0], MettaValue::Atom("first".to_string()));
+            }
+            _ => panic!("Expected single-element S-expression"),
+        }
+    }
+
+    #[test]
+    fn test_cons_atom_non_list_tail_error() {
+        let env = Environment::new();
+
+        // (cons-atom a 42) → Error
+        let items = vec![
+            MettaValue::Atom("cons-atom".to_string()),
+            MettaValue::Atom("a".to_string()),
+            MettaValue::Long(42),
+        ];
+
+        let (results, _) = eval_cons_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("tail must be expression or Nil"), "Error message: {}", msg);
+            }
+            _ => panic!("Expected error for non-list tail"),
+        }
+    }
+
+    #[test]
+    fn test_decons_atom_basic() {
+        let env = Environment::new();
+
+        // (decons-atom (a b c)) → (a (b c))
+        let items = vec![
+            MettaValue::Atom("decons-atom".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("a".to_string()),
+                MettaValue::Atom("b".to_string()),
+                MettaValue::Atom("c".to_string()),
+            ]),
+        ];
+
+        let (results, _) = eval_decons_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], MettaValue::Atom("a".to_string()));
+                match &items[1] {
+                    MettaValue::SExpr(tail) => {
+                        assert_eq!(tail.len(), 2);
+                        assert_eq!(tail[0], MettaValue::Atom("b".to_string()));
+                        assert_eq!(tail[1], MettaValue::Atom("c".to_string()));
+                    }
+                    _ => panic!("Expected S-expression for tail"),
+                }
+            }
+            _ => panic!("Expected S-expression result"),
+        }
+    }
+
+    #[test]
+    fn test_decons_atom_single_element() {
+        let env = Environment::new();
+
+        // (decons-atom (a)) → (a ())
+        let items = vec![
+            MettaValue::Atom("decons-atom".to_string()),
+            MettaValue::SExpr(vec![MettaValue::Atom("a".to_string())]),
+        ];
+
+        let (results, _) = eval_decons_atom(items, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0], MettaValue::Atom("a".to_string()));
+                match &items[1] {
+                    MettaValue::SExpr(tail) => {
+                        assert_eq!(tail.len(), 0);
+                    }
+                    _ => panic!("Expected empty S-expression for tail"),
+                }
+            }
+            _ => panic!("Expected S-expression result"),
+        }
+    }
+
+    #[test]
+    fn test_car_cdr_roundtrip() {
+        let env = Environment::new();
+
+        // (cons-atom (car-atom X) (cdr-atom X)) should equal X
+        // We'll simulate this by testing the values directly
+
+        let original = MettaValue::SExpr(vec![
+            MettaValue::Atom("a".to_string()),
+            MettaValue::Atom("b".to_string()),
+            MettaValue::Atom("c".to_string()),
+        ]);
+
+        // Get car
+        let car_items = vec![
+            MettaValue::Atom("car-atom".to_string()),
+            original.clone(),
+        ];
+        let (car_results, env1) = eval_car_atom(car_items, env);
+
+        // Get cdr
+        let cdr_items = vec![
+            MettaValue::Atom("cdr-atom".to_string()),
+            original.clone(),
+        ];
+        let (cdr_results, env2) = eval_cdr_atom(cdr_items, env1);
+
+        // Cons them back together
+        let cons_items = vec![
+            MettaValue::Atom("cons-atom".to_string()),
+            car_results[0].clone(),
+            cdr_results[0].clone(),
+        ];
+        let (cons_results, _) = eval_cons_atom(cons_items, env2);
+
+        assert_eq!(cons_results[0], original);
+    }
+
+    #[test]
+    fn test_decons_cons_roundtrip() {
+        let env = Environment::new();
+
+        let original = MettaValue::SExpr(vec![
+            MettaValue::Atom("p".to_string()),
+            MettaValue::Atom("q".to_string()),
+            MettaValue::Atom("r".to_string()),
+        ]);
+
+        // Decons
+        let decons_items = vec![
+            MettaValue::Atom("decons-atom".to_string()),
+            original.clone(),
+        ];
+        let (decons_results, env1) = eval_decons_atom(decons_items, env);
+
+        // Extract head and tail
+        match &decons_results[0] {
+            MettaValue::SExpr(items) => {
+                let head = items[0].clone();
+                let tail = items[1].clone();
+
+                // Cons them back
+                let cons_items = vec![
+                    MettaValue::Atom("cons-atom".to_string()),
+                    head,
+                    tail,
+                ];
+                let (cons_results, _) = eval_cons_atom(cons_items, env1);
+
+                assert_eq!(cons_results[0], original);
+            }
+            _ => panic!("Expected S-expression from decons-atom"),
         }
     }
 }

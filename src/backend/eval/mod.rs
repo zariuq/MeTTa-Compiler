@@ -487,6 +487,11 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "map-atom" => return EvalStep::Done(list_ops::eval_map_atom(items, env)),
             "filter-atom" => return EvalStep::Done(list_ops::eval_filter_atom(items, env)),
             "foldl-atom" => return EvalStep::Done(list_ops::eval_foldl_atom(items, env)),
+            "car-atom" => return EvalStep::Done(list_ops::eval_car_atom(items, env)),
+            "cdr-atom" => return EvalStep::Done(list_ops::eval_cdr_atom(items, env)),
+            "cons-atom" => return EvalStep::Done(list_ops::eval_cons_atom(items, env)),
+            "decons-atom" => return EvalStep::Done(list_ops::eval_decons_atom(items, env)),
+            "add-atom" => return EvalStep::Done(space::eval_add_atom(items, env)),
             _ => {}
         }
     }
@@ -614,8 +619,8 @@ fn try_eval_builtin(op: &str, args: &[MettaValue]) -> Option<MettaValue> {
         "<=" => eval_comparison(args, |a, b| a <= b),
         ">" => eval_comparison(args, |a, b| a > b),
         ">=" => eval_comparison(args, |a, b| a >= b),
-        "==" => eval_comparison(args, |a, b| a == b),
-        "!=" => eval_comparison(args, |a, b| a != b),
+        "==" => eval_equality(args),
+        "!=" => eval_inequality(args),
         // Logical operators
         "and" => eval_logical_binary(args, |a, b| a && b, "and"),
         "or" => eval_logical_binary(args, |a, b| a || b, "or"),
@@ -774,6 +779,38 @@ where
     };
 
     Some(MettaValue::Bool(op(a, b)))
+}
+
+/// Evaluate equality for all MettaValue types (like PeTTa)
+fn eval_equality(args: &[MettaValue]) -> Option<MettaValue> {
+    if args.len() != 2 {
+        return Some(MettaValue::Error(
+            format!(
+                "Equality (==) requires exactly 2 arguments, got {}. Usage: (== value1 value2)",
+                args.len()
+            ),
+            Arc::new(MettaValue::Atom("ArityError".to_string())),
+        ));
+    }
+
+    // Direct structural equality check
+    Some(MettaValue::Bool(args[0] == args[1]))
+}
+
+/// Evaluate inequality for all MettaValue types (like PeTTa)
+fn eval_inequality(args: &[MettaValue]) -> Option<MettaValue> {
+    if args.len() != 2 {
+        return Some(MettaValue::Error(
+            format!(
+                "Inequality (!=) requires exactly 2 arguments, got {}. Usage: (!= value1 value2)",
+                args.len()
+            ),
+            Arc::new(MettaValue::Atom("ArityError".to_string())),
+        ));
+    }
+
+    // Direct structural inequality check
+    Some(MettaValue::Bool(args[0] != args[1]))
 }
 
 /// Evaluate a binary logical operation (and, or)
