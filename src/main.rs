@@ -16,7 +16,7 @@ fn print_usage() {
     eprintln!("MeTTaTron v{}", VERSION);
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("    mettatron [OPTIONS] <INPUT>");
+    eprintln!("    mettatron [OPTIONS] <INPUT> [ARGS...]");
     eprintln!();
     eprintln!("OPTIONS:");
     eprintln!("    -h, --help           Print this help message");
@@ -28,11 +28,15 @@ fn print_usage() {
     eprintln!();
     eprintln!("ARGUMENTS:");
     eprintln!("    <INPUT>              Input MeTTa file (use '-' for stdin)");
+    eprintln!("    --args               Args after this go to script (for args with dashes)");
+    eprintln!("    [ARGS...]            Extra arguments passed to the program");
+    eprintln!("                         Access with (get-args) or (get-arg N)");
     eprintln!();
     eprintln!("EXAMPLES:");
     eprintln!("    mettatron input.metta");
+    eprintln!("    mettatron input.metta arg1 key=value");
+    eprintln!("    mettatron input.metta --args --flag -x");
     eprintln!("    mettatron --repl");
-    eprintln!("    mettatron --sexpr input.metta");
     eprintln!("    cat input.metta | mettatron -");
 }
 
@@ -45,6 +49,7 @@ struct Options {
     output: Option<String>,
     show_sexpr: bool,
     repl_mode: bool,
+    extra_args: Vec<String>, // Command-line arguments after the input file
 }
 
 fn parse_args() -> Result<Options, String> {
@@ -82,12 +87,32 @@ fn parse_args() -> Result<Options, String> {
             "--eval" => {
                 // Default mode, no-op
             }
+            "--args" => {
+                // Explicit args marker - everything after this goes to extra_args
+                i += 1;
+                let extra_args = args[i..].to_vec();
+                return Ok(Options {
+                    input,
+                    output,
+                    show_sexpr,
+                    repl_mode,
+                    extra_args,
+                });
+            }
             arg if arg.starts_with('-') && arg != "-" => {
                 return Err(format!("Unknown option: {}", arg));
             }
             arg => {
                 if input.is_some() {
-                    return Err("Multiple input files specified".to_string());
+                    // Already have input file, remaining args are extra_args
+                    let extra_args = args[i..].to_vec();
+                    return Ok(Options {
+                        input,
+                        output,
+                        show_sexpr,
+                        repl_mode,
+                        extra_args,
+                    });
                 }
                 input = Some(arg.to_string());
             }
@@ -100,6 +125,7 @@ fn parse_args() -> Result<Options, String> {
         output,
         show_sexpr,
         repl_mode,
+        extra_args: Vec::new(),
     })
 }
 
@@ -144,7 +170,7 @@ fn format_result(value: &MettaValue) -> String {
         MettaValue::Long(n) => n.to_string(),
         MettaValue::Float(f) => f.to_string(),
         MettaValue::String(s) => format!("\"{}\"", s),
-        MettaValue::Nil => "Nil".to_string(),
+        MettaValue::Nil => "()".to_string(),
         MettaValue::Error(msg, details) => {
             // Format as (Error "msg" details) to match MeTTa spec
             format!("(Error {} {})", msg, format_result(details))
@@ -166,7 +192,7 @@ fn format_results(results: &[MettaValue]) -> String {
     format!("[{}]", formatted.join(", "))
 }
 
-fn eval_metta(input: &str, options: &Options) -> Result<String, String> {
+fn eval_metta(input: &str, options: &Options, input_file: Option<&str>) -> Result<String, String> {
     if options.show_sexpr {
         // Parse with Tree-Sitter and show S-expressions
         let mut parser = mettatron::TreeSitterMettaParser::new()
@@ -181,7 +207,25 @@ fn eval_metta(input: &str, options: &Options) -> Result<String, String> {
 
     // Compile to MettaValue
     let state = compile(input).map_err(|e| e.to_string())?;
-    let mut env = state.environment;
+    let mut env = if !options.extra_args.is_empty() {
+        // Create environment with command-line args
+        let mut env_with_args = Environment::with_args(options.extra_args.clone());
+        // Copy compiled state into env_with_args
+        env_with_args = state.environment.clone();
+        env_with_args.cmd_args = options.extra_args.clone();
+        env_with_args
+    } else {
+        state.environment
+    };
+
+    // Set current file for import resolution
+    if let Some(file_path) = input_file {
+        use std::path::PathBuf;
+        let path = PathBuf::from(file_path);
+        if let Some(parent) = path.parent() {
+            env.current_file = Some(parent.to_path_buf());
+        }
+    }
 
     // Evaluate each expression
     let mut output = String::new();
@@ -345,7 +389,8 @@ fn main() {
     }
 
     // File evaluation mode
-    let input_content = match read_input(options.input.as_ref().unwrap()) {
+    let input_file = options.input.as_ref().unwrap();
+    let input_content = match read_input(input_file) {
         Ok(content) => content,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -353,7 +398,14 @@ fn main() {
         }
     };
 
-    let output = match eval_metta(&input_content, &options) {
+    // Pass input file path if not stdin
+    let file_path = if input_file != "-" {
+        Some(input_file.as_str())
+    } else {
+        None
+    };
+
+    let output = match eval_metta(&input_content, &options, file_path) {
         Ok(output) => output,
         Err(e) => {
             eprintln!("Error: {}", e);

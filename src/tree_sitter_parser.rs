@@ -525,14 +525,11 @@ mod tests {
         let result = strip_spans_vec(&parser.parse("$x").unwrap());
         assert_eq!(result, vec![SExpr::Atom("$x".to_string(), None)]);
 
-        // & is now an operator (space reference), not a variable prefix
+        // & prefix creates space reference token (like $var for variables)
         let result = strip_spans_vec(&parser.parse("&y").unwrap());
         assert_eq!(
             result,
-            vec![
-                SExpr::Atom("&".to_string(), None),
-                SExpr::Atom("y".to_string(), None)
-            ]
+            vec![SExpr::Atom("&y".to_string(), None)]
         );
 
         // Wildcard

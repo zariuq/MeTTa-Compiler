@@ -79,14 +79,13 @@ module.exports = grammar({
 
     // Regular identifiers (no special prefix)
     // Supports unicode - any non-whitespace, non-special character
-    // Must NOT start with $, !, ?, ', &, or digits (those are handled by special tokens)
-    // Excludes: ()[]{}; which have special meaning
-    identifier: $ => token(prec(2, choice(
-      // Identifiers starting with letters or most unicode
-      /[^\s()\[\]{};$!?'"&\d][^\s()\[\]{};]*/u,
-      // Operators that become identifiers when followed by more chars
-      /[+\-*/][^\s()\[\]{};]+/u,
-    ))),
+    // Must NOT start with special tokens or operators (handled separately)
+    // Excludes: ()[]{}; whitespace, and all operator/special chars
+    identifier: $ => token(prec(2,
+      // Identifiers starting with letters or most unicode (not operators/special)
+      // Excluded from start: $ ! ? ' " & digits + - * / _ : = > < | , @ .
+      /[^\s()\[\]{};$!?'"&\d+\-*/_:=><|,@.][^\s()\[\]{};]*/u,
+    )),
 
     // Operators (decomposed by type)
     operator: $ => choice(

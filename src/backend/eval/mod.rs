@@ -13,6 +13,7 @@ mod bindings;
 mod control_flow;
 mod errors;
 mod evaluation;
+mod io;
 mod list_ops;
 mod quoting;
 mod space;
@@ -98,6 +99,9 @@ const SPECIAL_FORMS: &[&str] = &[
     "is-error",
     "catch",
     "eval",
+    "import!",
+    "get-args",
+    "get-arg",
     "function",
     "return",
     "chain",
@@ -122,6 +126,9 @@ const SPECIAL_FORMS: &[&str] = &[
     "remove-atom",
     "size-atom",
     "max-atom",
+    "import!",
+    "get-args",
+    "get-arg",
 ];
 
 /// Convert MettaValue to a friendly type name for error messages
@@ -156,7 +163,7 @@ pub(crate) fn friendly_value_repr(value: &MettaValue) -> String {
         }
         MettaValue::String(s) => format!("\"{}\"", s),
         MettaValue::Atom(a) => a.clone(),
-        MettaValue::Nil => "Nil".to_string(),
+        MettaValue::Nil => "()".to_string(),
         MettaValue::SExpr(items) => {
             let inner: Vec<String> = items.iter().map(friendly_value_repr).collect();
             format!("({})", inner.join(" "))
@@ -514,6 +521,9 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "new-space" => return EvalStep::Done(space::eval_new_space(items, env)),
             "delete-space" => return EvalStep::Done(space::eval_delete_space(items, env)),
             "bind-space" => return EvalStep::Done(space::eval_bind_space(items, env)),
+            "import!" => return EvalStep::Done(io::eval_import(items, env)),
+            "get-args" => return EvalStep::Done(io::eval_get_args(items, env)),
+            "get-arg" => return EvalStep::Done(io::eval_get_arg(items, env)),
             "size-atom" => return EvalStep::Done(list_ops::eval_size_atom(items, env)),
             "max-atom" => return EvalStep::Done(list_ops::eval_max_atom(items, env)),
             _ => {}
@@ -2193,11 +2203,10 @@ mod tests {
         ]);
         assert!(!env.has_sexpr_fact(&inner_expr)); // NOT stored separately
 
-        // Use pattern matching to extract the nested part: (match & self (Outer $x) $x)
+        // Use pattern matching to extract the nested part: (match &self (Outer $x) $x)
         let match_query = MettaValue::SExpr(vec![
             MettaValue::Atom("match".to_string()),
-            MettaValue::Atom("&".to_string()),
-            MettaValue::Atom("self".to_string()),
+            MettaValue::Atom("&self".to_string()),
             MettaValue::SExpr(vec![
                 MettaValue::Atom("Outer".to_string()),
                 MettaValue::Atom("$x".to_string()), // Variable to capture nested part

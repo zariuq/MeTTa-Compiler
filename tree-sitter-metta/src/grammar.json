@@ -212,19 +212,9 @@
         "type": "PREC",
         "value": 2,
         "content": {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "PATTERN",
-              "value": "[^\\s()\\[\\]{};$!?'\"&\\d][^\\s()\\[\\]{};]*",
-              "flags": "u"
-            },
-            {
-              "type": "PATTERN",
-              "value": "[+\\-*/][^\\s()\\[\\]{};]+",
-              "flags": "u"
-            }
-          ]
+          "type": "PATTERN",
+          "value": "[^\\s()\\[\\]{};$!?'\"&\\d+\\-*/_:=><|,@.][^\\s()\\[\\]{};]*",
+          "flags": "u"
         }
       }
     },

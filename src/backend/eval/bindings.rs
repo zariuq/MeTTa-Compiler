@@ -12,7 +12,7 @@ fn format_for_print(value: &MettaValue) -> String {
         MettaValue::Long(n) => n.to_string(),
         MettaValue::Float(f) => f.to_string(),
         MettaValue::String(s) => s.clone(), // Don't add quotes for println
-        MettaValue::Nil => "Nil".to_string(),
+        MettaValue::Nil => "()".to_string(),
         MettaValue::Error(msg, details) => {
             format!("(Error {} {})", msg, format_for_print(details))
         }

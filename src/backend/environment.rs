@@ -2,8 +2,9 @@ use lru::LruCache;
 use mork::space::Space;
 use mork_interning::SharedMappingHandle;
 use pathmap::{zipper::*, PathMap};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -88,6 +89,24 @@ pub struct Environment {
     /// Used for temporary spaces that can be bound later with bind-space
     /// RwLock allows concurrent reads during parallel space operations
     anonymous_spaces: Arc<RwLock<HashMap<String, PathMap<()>>>>,
+
+    /// Import tracking: Set of already-loaded file paths (canonical paths)
+    /// Prevents duplicate imports and enables efficient re-import detection
+    /// RwLock allows concurrent checks during parallel evaluation
+    pub loaded_files: Arc<RwLock<HashSet<PathBuf>>>,
+
+    /// Import tracking: Stack of currently-loading files for cycle detection
+    /// Used to detect circular imports (A imports B imports A)
+    /// RwLock allows concurrent access during import resolution
+    pub loading_stack: Arc<RwLock<Vec<PathBuf>>>,
+
+    /// Current file path: Used for resolving relative imports
+    /// Updated when loading files to resolve paths relative to the importing file
+    pub current_file: Option<PathBuf>,
+
+    /// Command-line arguments: Passed from main() for access via get-args/get-arg
+    /// Stored as Vec<String> for indexed and key-value access
+    pub cmd_args: Vec<String>,
 }
 
 impl Environment {
@@ -108,7 +127,18 @@ impl Environment {
             type_index_dirty: Arc::new(RwLock::new(true)),
             named_spaces: Arc::new(RwLock::new(HashMap::new())),
             anonymous_spaces: Arc::new(RwLock::new(HashMap::new())),
+            loaded_files: Arc::new(RwLock::new(HashSet::new())),
+            loading_stack: Arc::new(RwLock::new(Vec::new())),
+            current_file: None,
+            cmd_args: Vec::new(),
         }
+    }
+
+    /// Create a new environment with command-line arguments
+    pub fn with_args(args: Vec<String>) -> Self {
+        let mut env = Self::new();
+        env.cmd_args = args;
+        env
     }
 
     /// CoW: Make this environment own its data (deep copy if sharing)
@@ -1487,6 +1517,10 @@ impl Environment {
             type_index_dirty,
             named_spaces: Arc::clone(&self.named_spaces),
             anonymous_spaces: Arc::clone(&self.anonymous_spaces),
+            loaded_files: Arc::clone(&self.loaded_files),
+            loading_stack: Arc::clone(&self.loading_stack),
+            current_file: self.current_file.clone(),
+            cmd_args: self.cmd_args.clone(),
         }
     }
 
@@ -1693,6 +1727,10 @@ impl Clone for Environment {
             type_index_dirty: Arc::clone(&self.type_index_dirty),
             named_spaces: Arc::clone(&self.named_spaces),
             anonymous_spaces: Arc::clone(&self.anonymous_spaces),
+            loaded_files: Arc::clone(&self.loaded_files),
+            loading_stack: Arc::clone(&self.loading_stack),
+            current_file: self.current_file.clone(),
+            cmd_args: self.cmd_args.clone(),
         }
     }
 }
