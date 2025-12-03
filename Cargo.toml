@@ -105,6 +105,7 @@ liblevenshtein = { version = "^0.7", features = ["pathmap-backend"] }
 default = ["interning", "async"]
 async = ["tokio"]
 interning = []
+trace = []  # Enable trace debugging output (zero-cost when disabled)
 
 [dev-dependencies]
 # For integration tests

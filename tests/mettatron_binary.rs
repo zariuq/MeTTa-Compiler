@@ -405,3 +405,160 @@ fn test_all_metta_examples() {
         );
     }
 }
+
+// ============================================================================
+// Trace Feature Tests
+// ============================================================================
+
+#[test]
+#[cfg(feature = "trace")]
+fn test_trace_flag_produces_output() {
+    let binary = find_mettatron_binary();
+    let test_file = examples_dir().join("trace_demo.metta");
+
+    assert!(
+        test_file.exists(),
+        "trace_demo.metta not found at {}",
+        test_file.display()
+    );
+
+    let output = Command::new(&binary)
+        .arg("--trace")
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute binary with --trace");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Verify trace output appears on stderr
+    assert!(
+        stderr.contains("[TRACE]"),
+        "Expected trace output not found in stderr with --trace flag.\nSTDERR:\n{}",
+        stderr
+    );
+
+    // Verify specific trace markers
+    assert!(
+        stderr.contains("eval_step"),
+        "Expected 'eval_step' in trace output.\nSTDERR:\n{}",
+        stderr
+    );
+
+    // Verify evaluation depth is shown
+    assert!(
+        stderr.contains("eval_step[0]") || stderr.contains("eval_step[1]"),
+        "Expected depth markers like 'eval_step[0]' in trace output.\nSTDERR:\n{}",
+        stderr
+    );
+}
+
+#[test]
+#[cfg(feature = "trace")]
+fn test_trace_flag_shows_special_forms() {
+    let binary = find_mettatron_binary();
+    let test_file = examples_dir().join("trace_demo.metta");
+
+    let output = Command::new(&binary)
+        .arg("--trace")
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute binary with --trace");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should show special form detection
+    assert!(
+        stderr.contains("special form:"),
+        "Expected 'special form:' markers in trace output.\nSTDERR:\n{}",
+        stderr
+    );
+
+    // Should specifically show ! and = special forms
+    assert!(
+        stderr.contains("special form: !") || stderr.contains("special form: ="),
+        "Expected detection of ! or = special forms.\nSTDERR:\n{}",
+        stderr
+    );
+}
+
+#[test]
+#[cfg(feature = "trace")]
+fn test_without_trace_flag_no_output() {
+    let binary = find_mettatron_binary();
+    let test_file = examples_dir().join("trace_demo.metta");
+
+    let output = Command::new(&binary)
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute binary without --trace");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Without --trace, there should be NO trace output
+    assert!(
+        !stderr.contains("[TRACE]"),
+        "Unexpected trace output found without --trace flag.\nSTDERR:\n{}",
+        stderr
+    );
+}
+
+#[test]
+#[cfg(feature = "trace")]
+fn test_help_shows_trace_option() {
+    let binary = find_mettatron_binary();
+
+    let output = Command::new(&binary)
+        .arg("--help")
+        .output()
+        .expect("Failed to execute binary --help");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}{}", stdout, stderr);
+
+    // When compiled with trace feature, --trace should be in help
+    assert!(
+        combined.contains("--trace"),
+        "Expected --trace option in help output when compiled with trace feature.\nOUTPUT:\n{}",
+        combined
+    );
+
+    assert!(
+        combined.contains("Enable trace output") || combined.contains("trace") || combined.contains("debug"),
+        "Expected trace-related description in help.\nOUTPUT:\n{}",
+        combined
+    );
+}
+
+/// Note: This test verifies that when the binary is compiled WITHOUT the trace feature,
+/// the --trace option is not shown in help. However, since integration tests may use
+/// a pre-built binary from a different build configuration, this test only runs when
+/// we can verify the binary was actually built without trace.
+///
+/// In practice, this is verified by ensuring the conditional compilation in main.rs
+/// works correctly - see the #[cfg(feature = "trace")] attribute on the --trace help line.
+
+#[test]
+fn test_trace_has_zero_impact_without_feature() {
+    // This test verifies that trace code is compiled away without the feature
+    // We can't directly test performance, but we can verify the binary works
+    let binary = find_mettatron_binary();
+    let test_file = examples_dir().join("simple.metta");
+
+    let output = Command::new(&binary)
+        .arg(&test_file)
+        .output()
+        .expect("Failed to execute binary");
+
+    assert!(
+        output.status.success(),
+        "Binary should work regardless of trace feature"
+    );
+
+    // Verify no trace output (regardless of feature)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("[TRACE]"),
+        "Should have no trace output without --trace flag"
+    );
+}

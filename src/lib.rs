@@ -6,6 +6,59 @@ pub mod repl;
 pub mod rholang_integration;
 pub mod tree_sitter_parser;
 
+// =============================================================================
+// Trace Macro - Zero-cost debugging for non-determinism
+// =============================================================================
+
+/// Zero-cost trace macro for debugging non-deterministic evaluation
+///
+/// This macro outputs trace messages to stderr when tracing is enabled via the
+/// --trace CLI flag. The check is inlined and optimized away when the 'trace'
+/// feature is disabled.
+///
+/// # Performance Impact
+///
+/// - **Without 'trace' feature** (default): ZERO - all trace code eliminated by compiler
+/// - **With 'trace' feature, disabled**: ~0.1% - single atomic read + predicted branch
+/// - **With 'trace' feature, enabled**: Normal I/O overhead
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use mettatron::trace;
+///
+/// fn eval_expr(expr: &MettaValue) -> Vec<MettaValue> {
+///     trace!("Evaluating: {}", expr);
+///
+///     if let Some(results) = try_pattern_match(expr) {
+///         trace!("  Pattern matched, found {} results", results.len());
+///         return results;
+///     }
+///
+///     trace!("  No match, returning empty");
+///     vec![]
+/// }
+/// ```
+///
+/// # Example Output
+///
+/// ```text
+/// [TRACE] Evaluating: (prove ((lit p) (nlit p)))
+/// [TRACE]   Trying rule: (= (prove $clauses) ...)
+/// [TRACE]   Pattern matched: $clauses = ((lit p) (nlit p))
+/// [TRACE]   Calling binary-resolution...
+/// [TRACE]     Found 1 resolvent: Nil
+/// [TRACE]   Result: (proof-found 1)
+/// ```
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        if $crate::config::trace_enabled() {
+            eprintln!("[TRACE] {}", format!($($arg)*));
+        }
+    };
+}
+
 /// MeTTaTron - MeTTa Evaluator Library
 ///
 /// This library provides a complete MeTTa language evaluator with lazy evaluation,

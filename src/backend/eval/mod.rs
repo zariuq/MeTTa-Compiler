@@ -77,6 +77,10 @@ enum Continuation {
         depth: usize,
         /// Parent continuation
         parent_cont: usize,
+        /// Total number of branches (for tracing)
+        total_branches: usize,
+        /// Current branch index, 1-indexed (for tracing)
+        current_branch: usize,
     },
 }
 
@@ -313,7 +317,13 @@ fn eval_trampoline(value: MettaValue, env: Environment) -> EvalResult {
                                         // Convert to VecDeque ONCE and pop front (O(n) + O(1) vs O(n²))
                                         let mut matches_deque: VecDeque<_> =
                                             matches.into_iter().collect();
+                                        let total = matches_deque.len(); // Total number of branches
                                         let (rhs, bindings) = matches_deque.pop_front().unwrap();
+
+                                        // Trace: show branch being evaluated
+                                        if total > 1 {
+                                            crate::trace!("    [1/{}] evaluating branch: {:?}", total, rhs);
+                                        }
 
                                         // Create continuation to process remaining rule matches
                                         let match_cont_id = continuations.len();
@@ -323,6 +333,8 @@ fn eval_trampoline(value: MettaValue, env: Environment) -> EvalResult {
                                             env: env.clone(),
                                             depth,
                                             parent_cont,
+                                            total_branches: total,
+                                            current_branch: 1,
                                         });
 
                                         // Evaluate first rule RHS (values moved, not cloned)
@@ -365,6 +377,8 @@ fn eval_trampoline(value: MettaValue, env: Environment) -> EvalResult {
                         env,
                         depth,
                         parent_cont,
+                        total_branches,
+                        current_branch,
                     } => {
                         // Add results from this rule evaluation
                         results.extend(result.0);
@@ -378,6 +392,12 @@ fn eval_trampoline(value: MettaValue, env: Environment) -> EvalResult {
                         } else {
                             // More rules to evaluate - O(1) pop from VecDeque front
                             let (rhs, bindings) = remaining_matches.pop_front().unwrap();
+                            let next_branch = current_branch + 1;
+
+                            // Trace: show next branch being evaluated
+                            if total_branches > 1 {
+                                crate::trace!("    [{}/{}] evaluating branch: {:?}", next_branch, total_branches, rhs);
+                            }
 
                             // Put continuation back (modified)
                             continuations[cont_id] = Continuation::ProcessRuleMatches {
@@ -386,6 +406,8 @@ fn eval_trampoline(value: MettaValue, env: Environment) -> EvalResult {
                                 env: env.clone(),
                                 depth,
                                 parent_cont,
+                                total_branches,
+                                current_branch: next_branch,
                             };
 
                             // Evaluate next rule RHS
@@ -434,6 +456,8 @@ enum ProcessedSExpr {
 /// Perform a single step of evaluation.
 /// Returns either a final result or indicates more work is needed.
 fn eval_step(value: MettaValue, env: Environment, depth: usize) -> EvalStep {
+    crate::trace!("eval_step[{}]: {:?}", depth, value);
+
     // Check depth limit
     if depth > MAX_EVAL_DEPTH {
         return EvalStep::Done((
@@ -481,8 +505,14 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
     // Check for special forms - these are handled directly (they manage their own recursion)
     if let Some(MettaValue::Atom(op)) = items.first() {
         match op.as_str() {
-            "=" => return EvalStep::Done(space::eval_add(items, env)),
-            "!" => return EvalStep::Done(evaluation::force_eval(items, env)),
+            "=" => {
+                crate::trace!("  special form: = (add rule)");
+                return EvalStep::Done(space::eval_add(items, env));
+            }
+            "!" => {
+                crate::trace!("  special form: ! (force eval)");
+                return EvalStep::Done(evaluation::force_eval(items, env));
+            }
             "quote" => return EvalStep::Done(quoting::eval_quote(items, env)),
             "if" => return EvalStep::Done(control_flow::eval_if(items, env)),
             "error" => return EvalStep::Done(errors::eval_error(items, env)),
@@ -585,6 +615,10 @@ fn process_collected_sexpr(
         let all_matches = try_match_all_rules(&sexpr, &unified_env);
 
         if !all_matches.is_empty() {
+            // Trace: show when multiple rules match (non-determinism)
+            if all_matches.len() > 1 {
+                crate::trace!("  BRANCH: {:?} matches {} rules", sexpr, all_matches.len());
+            }
             // Collect rule matches for later evaluation
             rule_matches_to_eval.extend(all_matches);
         } else {

@@ -25,6 +25,8 @@ fn print_usage() {
     eprintln!("    --sexpr              Print S-expressions instead of evaluating");
     eprintln!("    --repl               Start interactive REPL");
     eprintln!("    --eval               Evaluate and print results (default)");
+    #[cfg(feature = "trace")]
+    eprintln!("    --trace              Enable trace output for debugging");
     eprintln!();
     eprintln!("ARGUMENTS:");
     eprintln!("    <INPUT>              Input MeTTa file (use '-' for stdin)");
@@ -86,6 +88,9 @@ fn parse_args() -> Result<Options, String> {
             }
             "--eval" => {
                 // Default mode, no-op
+            }
+            "--trace" => {
+                mettatron::config::enable_trace();
             }
             "--args" => {
                 // Explicit args marker - everything after this goes to extra_args

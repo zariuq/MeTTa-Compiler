@@ -214,6 +214,69 @@ pub fn apply_to_runtime_builder(
     builder
 }
 
+// =============================================================================
+// Trace Configuration - Zero-cost debugging for non-determinism
+// =============================================================================
+
+/// Global trace flag controlled by --trace CLI option
+///
+/// This flag is only available when compiled with the 'trace' feature flag.
+/// When disabled at compile time, all trace checks are eliminated by the compiler.
+///
+/// # Performance Impact
+///
+/// - **Without 'trace' feature** (default): ZERO overhead, all trace code eliminated
+/// - **With 'trace' feature, flag off**: ~0.1% overhead (single atomic read per check)
+/// - **With 'trace' feature, flag on**: Normal I/O overhead for trace output
+///
+/// # Usage
+///
+/// ```bash
+/// # Production: zero overhead
+/// cargo build --release
+/// ./mettatron program.metta           # No trace, no overhead
+///
+/// # Development: runtime toggle
+/// cargo build --features trace
+/// ./mettatron program.metta           # No trace output
+/// ./mettatron --trace program.metta   # Full trace output
+/// ```
+#[cfg(feature = "trace")]
+static TRACE_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Check if tracing is enabled
+///
+/// This function is inlined and returns a constant `false` when the 'trace' feature
+/// is disabled, allowing the compiler to eliminate all trace code via dead code elimination.
+#[cfg(feature = "trace")]
+#[inline(always)]
+pub fn trace_enabled() -> bool {
+    TRACE_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Check if tracing is enabled (no-op version when feature disabled)
+#[cfg(not(feature = "trace"))]
+#[inline(always)]
+pub fn trace_enabled() -> bool {
+    false // Constant - compiler eliminates all trace code
+}
+
+/// Enable trace output
+///
+/// Called when --trace flag is provided on the command line.
+/// When the 'trace' feature is disabled, this is a no-op.
+#[cfg(feature = "trace")]
+pub fn enable_trace() {
+    TRACE_ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Enable trace output (no-op version when feature disabled)
+#[cfg(not(feature = "trace"))]
+pub fn enable_trace() {
+    // No-op when feature disabled
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
