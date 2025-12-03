@@ -171,7 +171,7 @@ fn write_output(output: Option<&str>, content: &str) -> Result<(), String> {
 fn format_result(value: &MettaValue) -> String {
     match value {
         MettaValue::Atom(s) => s.clone(),
-        MettaValue::Bool(b) => b.to_string(),
+        MettaValue::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
         MettaValue::Long(n) => n.to_string(),
         MettaValue::Float(f) => f.to_string(),
         MettaValue::String(s) => format!("\"{}\"", s),

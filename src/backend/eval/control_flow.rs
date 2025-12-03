@@ -806,6 +806,139 @@ mod tests {
         assert_eq!(case_results[0], MettaValue::String("was empty".to_string()));
     }
 
+    /// Test that lowercase "true"/"false" atoms are NOT treated as boolean values.
+    /// This is critical: MeTTa uses uppercase True/False for booleans.
+    /// Lowercase true/false are just atoms and should be truthy (like any other atom).
+    #[test]
+    fn test_if_lowercase_false_is_truthy_atom() {
+        let env = Environment::new();
+
+        // (if false 1 2) should return 1 because "false" is an atom (truthy), not Bool(false)
+        // This mirrors: !(if false yes no) → [yes] (atom "false" is truthy!)
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::Atom("false".to_string()), // lowercase = atom, NOT boolean
+            MettaValue::Long(1),
+            MettaValue::Long(2),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(1)); // "false" atom is truthy!
+    }
+
+    #[test]
+    fn test_if_lowercase_true_is_truthy_atom() {
+        let env = Environment::new();
+
+        // (if true 1 2) should also return 1 because "true" is an atom (truthy)
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::Atom("true".to_string()), // lowercase = atom, truthy
+            MettaValue::Long(1),
+            MettaValue::Long(2),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(1)); // atom is truthy
+    }
+
+    #[test]
+    fn test_if_uppercase_bool_true_works() {
+        let env = Environment::new();
+
+        // (if True 1 2) with MettaValue::Bool(true) should return 1
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::Bool(true), // Proper boolean True
+            MettaValue::Long(1),
+            MettaValue::Long(2),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(1));
+    }
+
+    #[test]
+    fn test_if_uppercase_bool_false_works() {
+        let env = Environment::new();
+
+        // (if False 1 2) with MettaValue::Bool(false) should return 2
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::Bool(false), // Proper boolean False
+            MettaValue::Long(1),
+            MettaValue::Long(2),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(2)); // Takes else branch
+    }
+
+    #[test]
+    fn test_if_with_equality_returns_proper_bool() {
+        let env = Environment::new();
+
+        // (if (== 1 1) "yes" "no") should return "yes"
+        // This tests that == returns MettaValue::Bool(true), not an atom
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("==".to_string()),
+                MettaValue::Long(1),
+                MettaValue::Long(1),
+            ]),
+            MettaValue::String("yes".to_string()),
+            MettaValue::String("no".to_string()),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::String("yes".to_string()));
+    }
+
+    #[test]
+    fn test_if_with_inequality_returns_proper_bool() {
+        let env = Environment::new();
+
+        // (if (== 1 2) "yes" "no") should return "no"
+        // This tests that == returns MettaValue::Bool(false), not an atom
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("==".to_string()),
+                MettaValue::Long(1),
+                MettaValue::Long(2),
+            ]),
+            MettaValue::String("yes".to_string()),
+            MettaValue::String("no".to_string()),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::String("no".to_string()));
+    }
+
+    #[test]
+    fn test_if_nil_is_falsy() {
+        let env = Environment::new();
+
+        // (if () 1 2) should return 2 because () is falsy
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("if".to_string()),
+            MettaValue::Nil,
+            MettaValue::Long(1),
+            MettaValue::Long(2),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(2)); // Nil is falsy
+    }
+
     #[test]
     fn test_switch_case_with_nested_pattern_matching_and_variable_scoping() {
         let env = Environment::new();

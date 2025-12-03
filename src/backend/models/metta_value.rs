@@ -182,7 +182,7 @@ impl MettaValue {
                     s.clone()
                 }
             }
-            MettaValue::Bool(b) => b.to_string(),
+            MettaValue::Bool(b) => if *b { "True".to_string() } else { "False".to_string() },
             MettaValue::Long(n) => n.to_string(),
             MettaValue::Float(f) => f.to_string(),
             MettaValue::String(s) => format!("\"{}\"", s),
@@ -812,8 +812,8 @@ mod tests {
 
     #[test]
     fn test_to_mork_string_bool() {
-        assert_eq!(MettaValue::Bool(true).to_mork_string(), "true");
-        assert_eq!(MettaValue::Bool(false).to_mork_string(), "false");
+        assert_eq!(MettaValue::Bool(true).to_mork_string(), "True");
+        assert_eq!(MettaValue::Bool(false).to_mork_string(), "False");
     }
 
     #[test]

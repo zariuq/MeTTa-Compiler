@@ -104,7 +104,7 @@ fn write_metta_value(
         }
 
         MettaValue::Bool(b) => {
-            let s = if *b { "true" } else { "false" };
+            let s = if *b { "True" } else { "False" };
             write_symbol(s.as_bytes(), space, ez)?;
         }
 

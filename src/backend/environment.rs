@@ -325,9 +325,9 @@ impl Environment {
                     // Parse the symbol to check if it's a number or string literal
                     if let Ok(n) = symbol_str.parse::<i64>() {
                         MettaValue::Long(n)
-                    } else if symbol_str == "true" {
+                    } else if symbol_str == "true" || symbol_str == "True" {
                         MettaValue::Bool(true)
-                    } else if symbol_str == "false" {
+                    } else if symbol_str == "false" || symbol_str == "False" {
                         MettaValue::Bool(false)
                     } else if symbol_str.starts_with('"')
                         && symbol_str.ends_with('"')
