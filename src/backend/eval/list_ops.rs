@@ -2274,4 +2274,40 @@ mod tests {
             _ => panic!("Expected S-expression from decons-atom"),
         }
     }
+
+    #[test]
+    fn test_size_atom_basic() {
+        let env = Environment::new();
+
+        // (size-atom (1 2 3))
+        let items = vec![
+            MettaValue::Atom("size-atom".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Long(1),
+                MettaValue::Long(2),
+                MettaValue::Long(3),
+            ]),
+        ];
+
+        let (results, _) = eval_size_atom(items, env);
+        assert_eq!(results, vec![MettaValue::Long(3)]);
+    }
+
+    #[test]
+    fn test_max_atom_basic() {
+        let env = Environment::new();
+
+        // (max-atom (1 5 3))
+        let items = vec![
+            MettaValue::Atom("max-atom".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Long(1),
+                MettaValue::Long(5),
+                MettaValue::Long(3),
+            ]),
+        ];
+
+        let (results, _) = eval_max_atom(items, env);
+        assert_eq!(results, vec![MettaValue::Long(5)]);
+    }
 }

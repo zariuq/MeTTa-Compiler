@@ -1159,4 +1159,144 @@ mod tests {
             _ => panic!("Expected error without suggestion"),
         }
     }
+
+    #[test]
+    fn test_remove_atom_basic() {
+        let mut env = Environment::new();
+
+        // Add atom to &self
+        let (_, env) = eval_add_atom(
+            vec![
+                MettaValue::Atom("add-atom".to_string()),
+                MettaValue::Atom("&self".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+
+        // Verify it's there
+        let (results, env) = eval_match(
+            vec![
+                MettaValue::Atom("match".to_string()),
+                MettaValue::Atom("&self".to_string()),
+                MettaValue::Atom("foo".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(results, vec![MettaValue::Atom("foo".to_string())]);
+
+        // Remove it
+        let (results, env) = eval_remove_atom(
+            vec![
+                MettaValue::Atom("remove-atom".to_string()),
+                MettaValue::Atom("&self".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(results, vec![MettaValue::Nil]);
+
+        // Verify it's gone (match returns empty)
+        let (results, _) = eval_match(
+            vec![
+                MettaValue::Atom("match".to_string()),
+                MettaValue::Atom("&self".to_string()),
+                MettaValue::Atom("foo".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(results, vec![]);
+    }
+
+    #[test]
+    fn test_delete_space_basic() {
+        let env = Environment::new();
+
+        // Create and bind a space
+        let (space_results, env) = eval_new_space(
+            vec![MettaValue::Atom("new-space".to_string())],
+            env,
+        );
+        let space_value = space_results[0].clone();
+
+        let (_, env) = eval_bind_space(
+            vec![
+                MettaValue::Atom("bind-space".to_string()),
+                MettaValue::Atom("&test".to_string()),
+                space_value,
+            ],
+            env,
+        );
+
+        // Verify space exists by adding atom
+        let (results, env) = eval_add_atom(
+            vec![
+                MettaValue::Atom("add-atom".to_string()),
+                MettaValue::Atom("&test".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(results, vec![MettaValue::Nil]);
+
+        // Delete the space
+        let (results, env) = eval_delete_space(
+            vec![
+                MettaValue::Atom("delete-space".to_string()),
+                MettaValue::Atom("&test".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(results, vec![MettaValue::Nil]);
+
+        // Verify space is gone (trying to add-atom should error)
+        let (results, _) = eval_add_atom(
+            vec![
+                MettaValue::Atom("add-atom".to_string()),
+                MettaValue::Atom("&test".to_string()),
+                MettaValue::Atom("bar".to_string()),
+            ],
+            env,
+        );
+        assert!(matches!(results[0], MettaValue::Error(_, _)));
+    }
+
+    #[test]
+    fn test_new_space_with_let_star() {
+        let env = Environment::new();
+
+        // Simulate: (let* (($s (new-space)) (() (add-atom $s foo))) (match $s foo foo))
+
+        // Step 1: Create new space
+        let (space_results, env) = eval_new_space(
+            vec![MettaValue::Atom("new-space".to_string())],
+            env,
+        );
+        let space_value = space_results[0].clone();
+
+        // Step 2: Add atom to the space (using Space value directly)
+        let (add_results, env) = eval_add_atom(
+            vec![
+                MettaValue::Atom("add-atom".to_string()),
+                space_value.clone(),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(add_results, vec![MettaValue::Nil]);
+
+        // Step 3: Match from the space
+        let (match_results, _) = eval_match(
+            vec![
+                MettaValue::Atom("match".to_string()),
+                space_value,
+                MettaValue::Atom("foo".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ],
+            env,
+        );
+        assert_eq!(match_results, vec![MettaValue::Atom("foo".to_string())]);
+    }
 }
