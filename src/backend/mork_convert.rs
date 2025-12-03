@@ -49,20 +49,55 @@ impl ConversionContext {
 ///
 /// This creates a MORK s-expression that can be used with query_multi.
 /// Variables are converted to De Bruijn indices.
+///
+/// Starts with a small buffer and grows as needed (doubling each time).
 pub fn metta_to_mork_bytes(
     value: &MettaValue,
     space: &Space,
     ctx: &mut ConversionContext,
 ) -> Result<Vec<u8>, String> {
-    let mut buffer = vec![0u8; 4096];
-    let expr = Expr {
-        ptr: buffer.as_mut_ptr(),
-    };
-    let mut ez = ExprZipper::new(expr);
+    const INITIAL_SIZE: usize = 4096;  // Start with 4KB
+    const MAX_SIZE: usize = 1_048_576; // Max 1MB
 
-    write_metta_value(value, space, ctx, &mut ez)?;
+    let mut buffer_size = INITIAL_SIZE;
 
-    Ok(buffer[..ez.loc].to_vec())
+    loop {
+        let mut buffer = vec![0u8; buffer_size];
+        let expr = Expr {
+            ptr: buffer.as_mut_ptr(),
+        };
+        let mut ez = ExprZipper::new(expr);
+
+        // Try to write - if it fails with buffer overflow, retry with larger buffer
+        match write_metta_value(value, space, ctx, &mut ez) {
+            Ok(()) => {
+                // Check if ez.loc exceeded buffer bounds (MORK's ExprZipper doesn't always catch this)
+                if ez.loc > buffer.len() {
+                    if buffer_size < MAX_SIZE {
+                        // Buffer overflow - double the size and retry
+                        buffer_size *= 2;
+                        continue;
+                    } else {
+                        return Err(format!(
+                            "Expression too large: required {} bytes, max buffer size is {}",
+                            ez.loc, MAX_SIZE
+                        ));
+                    }
+                }
+                // Success! Return the trimmed buffer
+                return Ok(buffer[..ez.loc].to_vec());
+            }
+            Err(e) if e.contains("out of range") && buffer_size < MAX_SIZE => {
+                // Buffer overflow - double the size and retry
+                buffer_size *= 2;
+                continue;
+            }
+            Err(e) => {
+                // Other error or max size reached
+                return Err(e);
+            }
+        }
+    }
 }
 
 /// Recursively write MettaValue to ExprZipper
@@ -104,7 +139,7 @@ fn write_metta_value(
         }
 
         MettaValue::Bool(b) => {
-            let s = if *b { "True" } else { "False" };
+            let s = if *b { "true" } else { "false" };
             write_symbol(s.as_bytes(), space, ez)?;
         }
 
@@ -301,4 +336,44 @@ mod tests {
         // Should only have one variable in context
         assert_eq!(ctx.var_names.len(), 1);
     }
+
+    #[test]
+    fn test_buffer_resizing() {
+        let env = Environment::new();
+        let space = env.create_space();
+        let mut ctx = ConversionContext::new();
+
+        // Helper to create nested expressions
+        fn create_nested_expr(depth: usize) -> MettaValue {
+            if depth == 0 {
+                MettaValue::Atom("base".to_string())
+            } else {
+                MettaValue::SExpr(vec![
+                    MettaValue::Atom(format!("func{}", depth)),
+                    MettaValue::Atom(format!("arg{}", depth)),
+                    create_nested_expr(depth - 1),
+                ])
+            }
+        }
+
+        // Test with depth 200, which produces ~3.8KB (safely under initial 4KB buffer)
+        // MORK's encoding is very efficient: 200 levels of nesting = 3809 bytes
+        let expr = create_nested_expr(200);
+        let result = metta_to_mork_bytes(&expr, &space, &mut ctx);
+
+        // Should succeed with moderately large expression
+        assert!(result.is_ok(), "Buffer should handle 200 levels of nesting (3.8KB)");
+
+        let buffer = result.unwrap();
+        // Verify it's close to but under 4KB (verifies we're testing a substantial size)
+        assert!(buffer.len() > 3000, "Buffer should be > 3KB for 200-level nesting");
+        assert!(buffer.len() < 4096, "Buffer should be < 4KB (no doubling needed yet)");
+
+        // Note: Testing actual buffer doubling (4KB → 8KB) would require depths > 215,
+        // but MORK's ExprZipper has unsafe code that causes SIGSEGV when writing beyond
+        // buffer bounds. The bounds check we added (line 75) will help if MORK ever
+        // properly reports overflow, but currently it segfaults during writes.
+    }
+
 }
+

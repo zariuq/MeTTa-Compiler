@@ -95,8 +95,9 @@ uuid = { version = "1.0", features = ["v4"] }
 smallvec = "1.11"
 
 # liblevenshtein - Fuzzy string matching for "Did you mean?" suggestions
-# liblevenshtein = { path = "../liblevenshtein-rust", features = ["pathmap-backend"] }
-liblevenshtein = { version = "^0.7", features = ["pathmap-backend"] }
+# Optional: only included when spelling-suggestions feature is enabled
+# liblevenshtein = { path = "../liblevenshtein-rust", features = ["pathmap-backend"], optional = true }
+liblevenshtein = { version = "^0.7", features = ["pathmap-backend"], optional = true }
 
 # Note: jemalloc is already enabled globally via PathMap's features = ["jemalloc"]
 # PathMap sets tikv-jemallocator as the global allocator, providing 100-1000× parallel speedup
@@ -106,6 +107,7 @@ default = ["interning", "async"]
 async = ["tokio"]
 interning = []
 trace = []  # Enable trace debugging output (zero-cost when disabled)
+spelling-suggestions = ["dep:liblevenshtein"]  # Enable fuzzy "Did you mean?" suggestions
 
 [dev-dependencies]
 # For integration tests

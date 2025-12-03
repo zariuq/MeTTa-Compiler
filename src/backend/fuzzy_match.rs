@@ -2,12 +2,20 @@
 //!
 //! This module provides fuzzy matching capabilities using liblevenshtein's
 //! Levenshtein automata for efficient approximate string matching.
+//!
+//! **Feature Flag:** This module requires the `spelling-suggestions` feature.
+//! To enable: `cargo build --features spelling-suggestions`
 
+#[cfg(feature = "spelling-suggestions")]
 use liblevenshtein::dictionary::pathmap::PathMapDictionary;
+#[cfg(feature = "spelling-suggestions")]
 use liblevenshtein::dictionary::Dictionary; // Trait for contains()
+#[cfg(feature = "spelling-suggestions")]
 use liblevenshtein::transducer::{Candidate, Transducer};
+#[cfg(feature = "spelling-suggestions")]
 use std::sync::Arc;
 
+#[cfg(feature = "spelling-suggestions")]
 /// Fuzzy matcher for symbol suggestions using Levenshtein distance.
 ///
 /// Uses PathMapDictionary as the backend, which is compatible with
@@ -20,6 +28,15 @@ pub struct FuzzyMatcher {
     dictionary: Arc<PathMapDictionary<()>>,
 }
 
+#[cfg(not(feature = "spelling-suggestions"))]
+/// Stub implementation of FuzzyMatcher when spelling-suggestions feature is disabled.
+///
+/// This allows code using FuzzyMatcher to compile without the feature,
+/// but all methods will return None/empty results.
+#[derive(Clone, Default)]
+pub struct FuzzyMatcher;
+
+#[cfg(feature = "spelling-suggestions")]
 impl FuzzyMatcher {
     /// Create a new empty fuzzy matcher
     pub fn new() -> Self {
@@ -162,13 +179,68 @@ impl FuzzyMatcher {
     }
 }
 
-impl Default for FuzzyMatcher {
-    fn default() -> Self {
-        Self::new()
+// Stub implementation when spelling-suggestions feature is disabled
+#[cfg(not(feature = "spelling-suggestions"))]
+impl FuzzyMatcher {
+    /// Create a new empty fuzzy matcher (stub)
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Create a fuzzy matcher from an iterator of terms (stub)
+    pub fn from_terms<I, S>(_terms: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        Self
+    }
+
+    /// Add a term to the dictionary (stub - does nothing)
+    pub fn insert(&self, _term: &str) {}
+
+    /// Remove a term from the dictionary (stub - always returns false)
+    pub fn remove(&self, _term: &str) -> bool {
+        false
+    }
+
+    /// Check if a term exists in the dictionary (stub - always returns false)
+    pub fn contains(&self, _term: &str) -> bool {
+        false
+    }
+
+    /// Find similar terms (stub - returns empty vec)
+    pub fn suggest(&self, _query: &str, _max_distance: usize) -> Vec<(String, usize)> {
+        Vec::new()
+    }
+
+    /// Find the closest match (stub - returns None)
+    pub fn closest_match(&self, _query: &str, _max_distance: usize) -> Option<(String, usize)> {
+        None
+    }
+
+    /// Generate a "Did you mean?" error message (stub - returns None)
+    pub fn did_you_mean(
+        &self,
+        _query: &str,
+        _max_distance: usize,
+        _max_suggestions: usize,
+    ) -> Option<String> {
+        None
+    }
+
+    /// Get the number of terms in the dictionary (stub - returns 0)
+    pub fn len(&self) -> usize {
+        0
+    }
+
+    /// Check if the dictionary is empty (stub - always returns true)
+    pub fn is_empty(&self) -> bool {
+        true
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "spelling-suggestions"))]
 mod tests {
     use super::*;
 

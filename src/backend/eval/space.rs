@@ -1107,6 +1107,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "spelling-suggestions")]
     fn test_space_name_typo_suggestion() {
         let env = Environment::new();
 

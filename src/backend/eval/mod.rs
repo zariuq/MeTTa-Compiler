@@ -2663,6 +2663,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "spelling-suggestions")]
     fn test_undefined_symbol_with_rule_suggestion() {
         let mut env = Environment::new();
 

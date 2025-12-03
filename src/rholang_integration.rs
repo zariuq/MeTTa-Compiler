@@ -1336,6 +1336,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "spelling-suggestions")]
     fn test_keyword_suggestion_quota_to_quote() {
         use crate::tree_sitter_parser::{SyntaxError, SyntaxErrorKind};
 
@@ -1356,6 +1357,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "spelling-suggestions")]
     fn test_keyword_suggestion_iff_to_if() {
         use crate::tree_sitter_parser::{SyntaxError, SyntaxErrorKind};
 
