@@ -105,12 +105,21 @@ const SPECIAL_FORMS: &[&str] = &[
     "case",
     "switch",
     "let",
+    "let*",
+    "println",
+    "progn",
+    "prog1",
     ":",
     "get-type",
     "check-type",
     "map-atom",
     "filter-atom",
     "foldl-atom",
+    "bind-space",
+    "new-space",
+    "delete-space",
+    "add-atom",
+    "remove-atom",
     "size-atom",
     "max-atom",
 ];
@@ -128,6 +137,7 @@ fn friendly_type_name(value: &MettaValue) -> &'static str {
         MettaValue::SExpr(_) => "S-expression",
         MettaValue::Error(_, _) => "Error",
         MettaValue::Type(_) => "Type",
+        MettaValue::Space(_) => "Space",
     }
 }
 
@@ -153,6 +163,7 @@ pub(crate) fn friendly_value_repr(value: &MettaValue) -> String {
         }
         MettaValue::Error(msg, _) => format!("(error \"{}\")", msg),
         MettaValue::Type(t) => format!("(: {})", friendly_value_repr(t)),
+        MettaValue::Space(id) => format!("(space {})", id),
     }
 }
 
@@ -446,7 +457,8 @@ fn eval_step(value: MettaValue, env: Environment, depth: usize) -> EvalStep {
         | MettaValue::Float(_)
         | MettaValue::String(_)
         | MettaValue::Nil
-        | MettaValue::Type(_) => EvalStep::Done((vec![value], env)),
+        | MettaValue::Type(_)
+        | MettaValue::Space(_) => EvalStep::Done((vec![value], env)),
 
         // S-expressions need special handling
         MettaValue::SExpr(items) => eval_sexpr_step(items, env, depth),
@@ -483,6 +495,10 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
                 return EvalStep::Done(control_flow::eval_switch_internal_handler(items, env))
             }
             "let" => return EvalStep::Done(bindings::eval_let(items, env)),
+            "let*" => return EvalStep::Done(bindings::eval_let_star(items, env)),
+            "println" => return EvalStep::Done(bindings::eval_println(items, env)),
+            "progn" => return EvalStep::Done(bindings::eval_progn(items, env)),
+            "prog1" => return EvalStep::Done(bindings::eval_prog1(items, env)),
             ":" => return EvalStep::Done(types::eval_type_assertion(items, env)),
             "get-type" => return EvalStep::Done(types::eval_get_type(items, env)),
             "check-type" => return EvalStep::Done(types::eval_check_type(items, env)),
@@ -495,6 +511,9 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "decons-atom" => return EvalStep::Done(list_ops::eval_decons_atom(items, env)),
             "add-atom" => return EvalStep::Done(space::eval_add_atom(items, env)),
             "remove-atom" => return EvalStep::Done(space::eval_remove_atom(items, env)),
+            "new-space" => return EvalStep::Done(space::eval_new_space(items, env)),
+            "delete-space" => return EvalStep::Done(space::eval_delete_space(items, env)),
+            "bind-space" => return EvalStep::Done(space::eval_bind_space(items, env)),
             "size-atom" => return EvalStep::Done(list_ops::eval_size_atom(items, env)),
             "max-atom" => return EvalStep::Done(list_ops::eval_max_atom(items, env)),
             _ => {}
@@ -1114,8 +1133,9 @@ fn pattern_specificity(pattern: &MettaValue) -> usize {
         | MettaValue::Long(_)
         | MettaValue::Float(_)
         | MettaValue::String(_)
-        | MettaValue::Nil => {
-            0 // Literals are most specific (including standalone "&")
+        | MettaValue::Nil
+        | MettaValue::Space(_) => {
+            0 // Literals are most specific (including standalone "&" and spaces)
         }
         MettaValue::SExpr(items) => {
             // Sum specificity of all items

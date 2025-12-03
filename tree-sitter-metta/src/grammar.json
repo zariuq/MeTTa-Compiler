@@ -101,6 +101,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "space_reference"
+        },
+        {
+          "type": "SYMBOL",
           "name": "wildcard"
         },
         {
@@ -144,7 +148,25 @@
           },
           {
             "type": "PATTERN",
-            "value": "[a-zA-Z0-9_'\\-+*/&]*"
+            "value": "[^\\s()\\[\\]{};]*",
+            "flags": "u"
+          }
+        ]
+      }
+    },
+    "space_reference": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "&"
+          },
+          {
+            "type": "PATTERN",
+            "value": "[^\\s()\\[\\]{};]*",
+            "flags": "u"
           }
         ]
       }
@@ -194,11 +216,13 @@
           "members": [
             {
               "type": "PATTERN",
-              "value": "[a-zA-Z][a-zA-Z0-9_'\\-+*/]*"
+              "value": "[^\\s()\\[\\]{};$!?'\"&\\d][^\\s()\\[\\]{};]*",
+              "flags": "u"
             },
             {
               "type": "PATTERN",
-              "value": "[+\\-*/][a-zA-Z0-9_'\\-+*/]+"
+              "value": "[+\\-*/][^\\s()\\[\\]{};]+",
+              "flags": "u"
             }
           ]
         }

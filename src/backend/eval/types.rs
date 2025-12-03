@@ -112,6 +112,9 @@ fn infer_type(expr: &MettaValue, env: &Environment) -> MettaValue {
         // Errors have Error type
         MettaValue::Error(_, _) => MettaValue::Atom("Error".to_string()),
 
+        // Spaces have Space type
+        MettaValue::Space(_) => MettaValue::Atom("Space".to_string()),
+
         // For atoms, look up in environment
         MettaValue::Atom(name) => {
             // Check if it's a variable (starts with $, &, or ')

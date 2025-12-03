@@ -47,11 +47,11 @@ pub(super) fn eval_add(items: Vec<MettaValue>, env: Environment) -> EvalResult {
 pub(super) fn eval_match(items: Vec<MettaValue>, env: Environment) -> EvalResult {
     let args = &items[1..];
 
-    if args.len() < 4 {
+    if args.len() < 3 {
         let got = args.len();
         let err = MettaValue::Error(
             format!(
-                "match requires exactly 4 arguments, got {}. Usage: (match & space pattern template)",
+                "match requires exactly 3 arguments, got {}. Usage: (match &space pattern template) or (match Space pattern template)",
                 got
             ),
             Arc::new(MettaValue::SExpr(args.to_vec())),
@@ -59,44 +59,64 @@ pub(super) fn eval_match(items: Vec<MettaValue>, env: Environment) -> EvalResult
         return (vec![err], env);
     }
 
-    let space_ref = &args[0];
-    let space_name = &args[1];
-    let pattern = &args[2];
-    let template = &args[3];
+    if args.len() != 3 {
+        let err = MettaValue::Error(
+            format!("match requires exactly 3 arguments, got {}. Usage: (match &space pattern template)", args.len()),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
 
-    // Check that first arg is & (space reference operator)
-    match space_ref {
-        MettaValue::Atom(s) if s == "&" => {
-            // Accept any space name (PeTTa-style)
-            match space_name {
-                MettaValue::Atom(name) => {
-                    // Use match_named_space which auto-handles "self" and other spaces
-                    let results = env.match_named_space(name, pattern, template);
-                    (results, env)
-                }
-                _ => {
-                    let err = MettaValue::Error(
-                        format!(
-                            "match: space name must be an atom, got: {}",
-                            super::friendly_value_repr(space_name)
-                        ),
-                        Arc::new(MettaValue::SExpr(args.to_vec())),
-                    );
-                    (vec![err], env)
-                }
+    let pattern = &args[1];
+    let template = &args[2];
+
+    // Check if first arg is Space value (anonymous space)
+    if let MettaValue::Space(uuid) = &args[0] {
+        // Anonymous space: (match Space(uuid) pattern template)
+        let results = env.match_anonymous_space(uuid, pattern, template);
+        return (results, env);
+    }
+
+    // Check if first arg is a space reference: &name
+    if let MettaValue::Atom(space_ref) = &args[0] {
+        if let Some(name) = space_ref.strip_prefix('&') {
+            // Space reference: (match &name pattern template)
+            if name == "self" {
+                // Use optimized match_space method that works directly with MORK
+                let results = env.match_space(pattern, template);
+                return (results, env);
+            } else if env.space_exists(name) {
+                // Use match_named_space for existing named spaces
+                let results = env.match_named_space(name, pattern, template);
+                return (results, env);
+            } else {
+                // Space doesn't exist - provide helpful suggestion
+                let suggestion = suggest_space_name(name);
+                let msg = match suggestion {
+                    Some(s) => format!(
+                        "match: space '{}' does not exist. {}\nCreate it with: !(bind-space &{} (new-space))",
+                        name, s, name
+                    ),
+                    None => format!(
+                        "match: space '{}' does not exist. Create it with: !(bind-space &{} (new-space))",
+                        name, name
+                    ),
+                };
+                let err = MettaValue::Error(msg, Arc::new(MettaValue::SExpr(args.to_vec())));
+                return (vec![err], env);
             }
         }
-        _ => {
-            let err = MettaValue::Error(
-                format!(
-                    "match requires & as first argument, got: {}",
-                    super::friendly_value_repr(space_ref)
-                ),
-                Arc::new(MettaValue::SExpr(args.to_vec())),
-            );
-            (vec![err], env)
-        }
     }
+
+    // Invalid first argument
+    let err = MettaValue::Error(
+        format!(
+            "match: first argument must be a Space value or &space-name, got: {}",
+            super::friendly_value_repr(&args[0])
+        ),
+        Arc::new(MettaValue::SExpr(args.to_vec())),
+    );
+    (vec![err], env)
 }
 
 /// Add atom to a space: (add-atom &space-name atom)
@@ -104,11 +124,11 @@ pub(super) fn eval_match(items: Vec<MettaValue>, env: Environment) -> EvalResult
 pub(super) fn eval_add_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
     let args = &items[1..];
 
-    if args.len() < 3 {
+    if args.len() != 2 {
         let got = args.len();
         let err = MettaValue::Error(
             format!(
-                "add-atom requires exactly 3 arguments, got {}. Usage: (add-atom & space-name atom)",
+                "add-atom requires exactly 2 arguments, got {}. Usage: (add-atom &space atom) or (add-atom Space atom)",
                 got
             ),
             Arc::new(MettaValue::SExpr(args.to_vec())),
@@ -116,55 +136,64 @@ pub(super) fn eval_add_atom(items: Vec<MettaValue>, env: Environment) -> EvalRes
         return (vec![err], env);
     }
 
-    let space_ref = &args[0];
-    let space_name = &args[1];
-    let atom = &args[2];
+    let atom = &args[1];
 
-    // Check that first arg is & (space reference operator)
-    match space_ref {
-        MettaValue::Atom(s) if s == "&" => {
-            // Get space name
-            match space_name {
-                MettaValue::Atom(name) => {
-                    let mut new_env = env.clone();
-                    new_env.add_to_named_space(name, atom);
-                    (vec![], new_env) // Return empty (side effect operation)
-                }
-                _ => {
-                    let err = MettaValue::Error(
-                        format!(
-                            "add-atom: space name must be an atom, got: {}",
-                            super::friendly_value_repr(space_name)
-                        ),
-                        Arc::new(MettaValue::SExpr(args.to_vec())),
-                    );
-                    (vec![err], env)
-                }
+    // Check if first arg is Space value (anonymous space)
+    if let MettaValue::Space(uuid) = &args[0] {
+        // Anonymous space: (add-atom Space(uuid) atom)
+        let mut new_env = env.clone();
+        new_env.add_to_anonymous_space(uuid, atom);
+        return (vec![MettaValue::Nil], new_env);
+    }
+
+    // Check if first arg is a space reference: &name
+    if let MettaValue::Atom(space_ref) = &args[0] {
+        if let Some(name) = space_ref.strip_prefix('&') {
+            // Space reference: (add-atom &name atom)
+            if name == "self" || env.space_exists(name) {
+                let mut new_env = env.clone();
+                new_env.add_to_named_space(name, atom);
+                return (vec![MettaValue::Nil], new_env);
+            } else {
+                // Space doesn't exist - provide helpful suggestion
+                let suggestion = suggest_space_name(name);
+                let msg = match suggestion {
+                    Some(s) => format!(
+                        "add-atom: space '{}' does not exist. {}\nCreate it with: !(bind-space &{} (new-space))",
+                        name, s, name
+                    ),
+                    None => format!(
+                        "add-atom: space '{}' does not exist. Create it with: !(bind-space &{} (new-space))",
+                        name, name
+                    ),
+                };
+                let err = MettaValue::Error(msg, Arc::new(MettaValue::SExpr(args.to_vec())));
+                return (vec![err], env);
             }
         }
-        _ => {
-            let err = MettaValue::Error(
-                format!(
-                    "add-atom requires & as first argument, got: {}",
-                    super::friendly_value_repr(space_ref)
-                ),
-                Arc::new(MettaValue::SExpr(args.to_vec())),
-            );
-            (vec![err], env)
-        }
     }
+
+    // Invalid first argument
+    let err = MettaValue::Error(
+        format!(
+            "add-atom: first argument must be a Space value or &space-name, got: {}",
+            super::friendly_value_repr(&args[0])
+        ),
+        Arc::new(MettaValue::SExpr(args.to_vec())),
+    );
+    (vec![err], env)
 }
 
-/// Remove atom from a space: (remove-atom &space-name atom)
+/// Remove atom from a space: (remove-atom &space-name atom) or (remove-atom Space(uuid) atom)
 /// PeTTa-style: removes the atom from the named space
 pub(super) fn eval_remove_atom(items: Vec<MettaValue>, env: Environment) -> EvalResult {
     let args = &items[1..];
 
-    if args.len() < 3 {
+    if args.len() != 2 {
         let got = args.len();
         let err = MettaValue::Error(
             format!(
-                "remove-atom requires exactly 3 arguments, got {}. Usage: (remove-atom & space-name atom)",
+                "remove-atom requires exactly 2 arguments, got {}. Usage: (remove-atom &space atom) or (remove-atom Space atom)",
                 got
             ),
             Arc::new(MettaValue::SExpr(args.to_vec())),
@@ -172,43 +201,217 @@ pub(super) fn eval_remove_atom(items: Vec<MettaValue>, env: Environment) -> Eval
         return (vec![err], env);
     }
 
-    let space_ref = &args[0];
-    let space_name = &args[1];
-    let atom = &args[2];
+    let atom = &args[1];
 
-    // Check that first arg is & (space reference operator)
-    match space_ref {
-        MettaValue::Atom(s) if s == "&" => {
-            // Get space name
-            match space_name {
-                MettaValue::Atom(name) => {
-                    let mut new_env = env.clone();
-                    new_env.remove_from_named_space(name, atom);
-                    (vec![], new_env) // Return empty (side effect operation)
-                }
-                _ => {
+    // Check if first arg is Space value (anonymous space)
+    if let MettaValue::Space(uuid) = &args[0] {
+        // Anonymous space: (remove-atom Space(uuid) atom)
+        let mut new_env = env.clone();
+        new_env.remove_from_anonymous_space(uuid, atom);
+        return (vec![MettaValue::Nil], new_env);
+    }
+
+    // Check if first arg is a space reference: &name
+    if let MettaValue::Atom(space_ref) = &args[0] {
+        if let Some(name) = space_ref.strip_prefix('&') {
+            // Space reference: (remove-atom &name atom)
+            if name == "self" || env.space_exists(name) {
+                let mut new_env = env.clone();
+                new_env.remove_from_named_space(name, atom);
+                return (vec![MettaValue::Nil], new_env);
+            } else {
+                // Space doesn't exist - provide helpful suggestion
+                let suggestion = suggest_space_name(name);
+                let msg = match suggestion {
+                    Some(s) => format!(
+                        "remove-atom: space '{}' does not exist. {}",
+                        name, s
+                    ),
+                    None => format!(
+                        "remove-atom: space '{}' does not exist",
+                        name
+                    ),
+                };
+                let err = MettaValue::Error(msg, Arc::new(MettaValue::SExpr(args.to_vec())));
+                return (vec![err], env);
+            }
+        }
+    }
+
+    // Invalid first argument
+    let err = MettaValue::Error(
+        format!(
+            "remove-atom: first argument must be a Space value or &space-name, got: {}",
+            super::friendly_value_repr(&args[0])
+        ),
+        Arc::new(MettaValue::SExpr(args.to_vec())),
+    );
+    (vec![err], env)
+}
+
+/// Create a new anonymous space: (new-space)
+/// Returns a Space value that can be bound later with bind-space
+/// Usage: (let $s (new-space)) or !(bind-space &name (new-space))
+pub(super) fn eval_new_space(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if !args.is_empty() {
+        let err = MettaValue::Error(
+            "new-space takes no arguments. Usage: (new-space)".to_string(),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    // Generate UUID for anonymous space
+    use uuid::Uuid;
+    let uuid = Uuid::new_v4().to_string();
+
+    // Create anonymous space in environment
+    let mut new_env = env.clone();
+    new_env.create_anonymous_space(uuid.clone());
+
+    // Return the space value
+    (vec![MettaValue::Space(uuid)], new_env)
+}
+
+/// Delete a named space: (delete-space &space-name)
+/// Returns empty - this is a side effect operation
+pub(super) fn eval_delete_space(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() != 1 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "delete-space requires exactly 1 argument, got {}. Usage: (delete-space &space-name)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    // Check if first arg is a space reference: &name
+    if let MettaValue::Atom(space_ref) = &args[0] {
+        if let Some(name) = space_ref.strip_prefix('&') {
+            // Space reference: (delete-space &name)
+            if name == "self" {
+                let err = MettaValue::Error(
+                    "delete-space: cannot delete the main 'self' space".to_string(),
+                    Arc::new(MettaValue::SExpr(args.to_vec())),
+                );
+                return (vec![err], env);
+            }
+
+            let mut new_env = env.clone();
+            let existed = new_env.delete_named_space(name);
+
+            if !existed {
+                let suggestion = suggest_space_name(name);
+                let msg = match suggestion {
+                    Some(s) => format!(
+                        "delete-space: space '{}' does not exist. {}",
+                        name, s
+                    ),
+                    None => format!("delete-space: space '{}' does not exist", name),
+                };
+                let err = MettaValue::Error(msg, Arc::new(MettaValue::SExpr(args.to_vec())));
+                return (vec![err], env);
+            }
+
+            return (vec![MettaValue::Nil], new_env);
+        }
+    }
+
+    // Invalid first argument
+    let err = MettaValue::Error(
+        format!(
+            "delete-space requires &space-name as argument, got: {}",
+            super::friendly_value_repr(&args[0])
+        ),
+        Arc::new(MettaValue::SExpr(args.to_vec())),
+    );
+    (vec![err], env)
+}
+
+/// Bind a space to a global name: (bind-space &name <space-value>)
+/// Takes a Space value (from new-space) and binds it to a global name
+/// Usage: !(bind-space &myspace (new-space))
+pub(super) fn eval_bind_space(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() != 2 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "bind-space requires exactly 2 arguments, got {}. Usage: (bind-space &name <space-value>)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let space_value = &args[1];
+
+    // If space_value is an S-expression, evaluate it first
+    let (evaluated_space, eval_env) = match space_value {
+        MettaValue::SExpr(_) => {
+            let (results, temp_env) = super::eval(space_value.clone(), env.clone());
+            if results.len() == 1 {
+                (results[0].clone(), temp_env)
+            } else {
+                (space_value.clone(), env.clone())
+            }
+        }
+        _ => (space_value.clone(), env.clone())
+    };
+
+    // Check if first arg is a space reference: &name
+    if let MettaValue::Atom(space_ref) = &args[0] {
+        if let Some(name) = space_ref.strip_prefix('&') {
+            // Space reference: (bind-space &name space-value)
+            if let MettaValue::Space(uuid) = &evaluated_space {
+                // Bind the anonymous space to the name
+                let mut new_env = eval_env.clone();
+                let success = new_env.bind_anonymous_to_name(name, uuid);
+
+                if !success {
+                    // Either name already bound or UUID doesn't exist
                     let err = MettaValue::Error(
                         format!(
-                            "remove-atom: space name must be an atom, got: {}",
-                            super::friendly_value_repr(space_name)
+                            "bind-space: cannot bind '{}'. Name may already be bound or space doesn't exist",
+                            name
                         ),
                         Arc::new(MettaValue::SExpr(args.to_vec())),
                     );
-                    (vec![err], env)
+                    return (vec![err], env);
                 }
+
+                return (vec![MettaValue::Nil], new_env);
+            } else {
+                let err = MettaValue::Error(
+                    format!(
+                        "bind-space: second argument must be a Space value, got: {}",
+                        super::friendly_value_repr(&evaluated_space)
+                    ),
+                    Arc::new(MettaValue::SExpr(args.to_vec())),
+                );
+                return (vec![err], env);
             }
         }
-        _ => {
-            let err = MettaValue::Error(
-                format!(
-                    "remove-atom requires & as first argument, got: {}",
-                    super::friendly_value_repr(space_ref)
-                ),
-                Arc::new(MettaValue::SExpr(args.to_vec())),
-            );
-            (vec![err], env)
-        }
     }
+
+    // Invalid first argument
+    let err = MettaValue::Error(
+        format!(
+            "bind-space requires &space-name as first argument, got: {}",
+            super::friendly_value_repr(&args[0])
+        ),
+        Arc::new(MettaValue::SExpr(args.to_vec())),
+    );
+    (vec![err], env)
 }
 
 #[cfg(test)]
@@ -597,8 +800,8 @@ mod tests {
             MettaValue::Error(msg, _) => {
                 assert!(msg.contains("match"), "Expected 'match' in: {}", msg);
                 assert!(
-                    msg.contains("4 arguments"),
-                    "Expected '4 arguments' in: {}",
+                    msg.contains("at least 3 arguments"),
+                    "Expected 'at least 3 arguments' in: {}",
                     msg
                 );
                 assert!(msg.contains("got 2"), "Expected 'got 2' in: {}", msg);
@@ -619,16 +822,16 @@ mod tests {
         assert_eq!(results.len(), 1);
         match &results[0] {
             MettaValue::Error(msg, _) => {
-                assert!(msg.contains("match requires & as first argument"));
+                assert!(msg.contains("first argument must be a Space value or &"));
             }
             _ => panic!("Expected error for wrong space reference"),
         }
 
-        // Test match with unsupported space name
+        // Test match with non-existent space name
         let match_wrong_space = MettaValue::SExpr(vec![
             MettaValue::Atom("match".to_string()),
             MettaValue::Atom("&".to_string()),
-            MettaValue::Atom("other".to_string()), // Only "self" supported
+            MettaValue::Atom("other".to_string()), // Space doesn't exist
             MettaValue::Atom("pattern".to_string()),
             MettaValue::Atom("template".to_string()),
         ]);
@@ -636,9 +839,10 @@ mod tests {
         assert_eq!(results.len(), 1);
         match &results[0] {
             MettaValue::Error(msg, _) => {
-                assert!(msg.contains("only supports 'self'"));
+                assert!(msg.contains("does not exist"));
+                assert!(msg.contains("bind-space"));
             }
-            _ => panic!("Expected error for unsupported space name"),
+            _ => panic!("Expected error for non-existent space"),
         }
     }
 

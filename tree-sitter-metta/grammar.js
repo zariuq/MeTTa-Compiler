@@ -42,6 +42,7 @@ module.exports = grammar({
     // Order matters: more specific patterns first
     atom_expression: $ => choice(
       $.variable,
+      $.space_reference,
       $.wildcard,
       $.boolean_literal,  // Must come before identifier
       $.special_type_symbol,  // Must come before operator (contains %)
@@ -53,10 +54,17 @@ module.exports = grammar({
     ),
 
     // Variables: $var (for pattern variables)
-    // Note: & is an operator (space reference), not a variable prefix
-    // Note: 'var is handled by quote_prefix in prefixed_expression
+    // Supports unicode: letters, numbers, symbols, marks, and most punctuation
+    // Excludes: ()[]{}; which have special meaning in MeTTa
     variable: $ => token(
-      seq('$', /[a-zA-Z0-9_'\-+*/&]*/)
+      seq('$', /[^\s()\[\]{};]*/u)
+    ),
+
+    // Space references: &name (for referencing spaces)
+    // Examples: &self, &kb, &workspace
+    // Supports unicode just like variables
+    space_reference: $ => token(
+      seq('&', /[^\s()\[\]{};]*/u)
     ),
 
     // Wildcard pattern
@@ -70,11 +78,14 @@ module.exports = grammar({
     special_type_symbol: $ => token(prec(3, /%[A-Za-z][A-Za-z0-9_-]*%/)),
 
     // Regular identifiers (no special prefix)
+    // Supports unicode - any non-whitespace, non-special character
+    // Must NOT start with $, !, ?, ', &, or digits (those are handled by special tokens)
+    // Excludes: ()[]{}; which have special meaning
     identifier: $ => token(prec(2, choice(
-      // Standard identifiers: letters, digits, allowed special chars
-      /[a-zA-Z][a-zA-Z0-9_'\-+*/]*/,
-      // Can start with some operators if followed by alphanumeric
-      /[+\-*/][a-zA-Z0-9_'\-+*/]+/,
+      // Identifiers starting with letters or most unicode
+      /[^\s()\[\]{};$!?'"&\d][^\s()\[\]{};]*/u,
+      // Operators that become identifiers when followed by more chars
+      /[+\-*/][^\s()\[\]{};]+/u,
     ))),
 
     // Operators (decomposed by type)

@@ -150,6 +150,7 @@ fn format_result(value: &MettaValue) -> String {
             format!("(Error {} {})", msg, format_result(details))
         }
         MettaValue::Type(t) => format!("Type({})", format_result(t)),
+        MettaValue::Space(uuid) => format!("GroundingSpace-{}", &uuid[..8]), // Show first 8 chars of UUID
         MettaValue::SExpr(items) => {
             let formatted: Vec<String> = items.iter().map(format_result).collect();
             format!("({})", formatted.join(" "))

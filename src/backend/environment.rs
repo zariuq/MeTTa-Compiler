@@ -79,11 +79,15 @@ pub struct Environment {
     /// RwLock allows concurrent checks of dirty flag
     type_index_dirty: Arc<RwLock<bool>>,
 
-    /// Named spaces: PeTTa-style auto-creating spaces
-    /// Maps space name -> PathMap for O(1) clause indexing
+    /// Named spaces: Maps space name -> PathMap for O(1) clause indexing
     /// "self" always refers to the main btm
     /// RwLock allows concurrent reads during parallel space operations
     named_spaces: Arc<RwLock<HashMap<String, PathMap<()>>>>,
+
+    /// Anonymous spaces: Maps UUID -> PathMap for anonymous spaces from (new-space)
+    /// Used for temporary spaces that can be bound later with bind-space
+    /// RwLock allows concurrent reads during parallel space operations
+    anonymous_spaces: Arc<RwLock<HashMap<String, PathMap<()>>>>,
 }
 
 impl Environment {
@@ -103,6 +107,7 @@ impl Environment {
             type_index: Arc::new(RwLock::new(None)),
             type_index_dirty: Arc::new(RwLock::new(true)),
             named_spaces: Arc::new(RwLock::new(HashMap::new())),
+            anonymous_spaces: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -115,7 +120,7 @@ impl Environment {
             return;
         }
 
-        // Deep copy all 7 RwLock-wrapped fields
+        // Deep copy all 9 RwLock-wrapped fields
         // Clone the data first to avoid borrowing issues
         let btm_data = self.btm.read().unwrap().clone();
         let rule_index_data = self.rule_index.read().unwrap().clone();
@@ -124,6 +129,8 @@ impl Environment {
         let pattern_cache_data = self.pattern_cache.read().unwrap().clone();
         let type_index_data = self.type_index.read().unwrap().clone();
         let type_index_dirty_data = *self.type_index_dirty.read().unwrap();
+        let named_spaces_data = self.named_spaces.read().unwrap().clone();
+        let anonymous_spaces_data = self.anonymous_spaces.read().unwrap().clone();
 
         // Now assign the new Arc<RwLock<T>> instances
         self.btm = Arc::new(RwLock::new(btm_data));
@@ -133,6 +140,8 @@ impl Environment {
         self.pattern_cache = Arc::new(RwLock::new(pattern_cache_data));
         self.type_index = Arc::new(RwLock::new(type_index_data));
         self.type_index_dirty = Arc::new(RwLock::new(type_index_dirty_data));
+        self.named_spaces = Arc::new(RwLock::new(named_spaces_data));
+        self.anonymous_spaces = Arc::new(RwLock::new(anonymous_spaces_data));
 
         // Mark as owning data and modified
         self.owns_data = true;
@@ -1477,6 +1486,191 @@ impl Environment {
             type_index,
             type_index_dirty,
             named_spaces: Arc::clone(&self.named_spaces),
+            anonymous_spaces: Arc::clone(&self.anonymous_spaces),
+        }
+    }
+
+    /// Create a new named space
+    /// Returns true if the space was created, false if it already existed
+    pub fn create_named_space(&mut self, name: &str) -> bool {
+        self.make_owned();
+        let mut spaces = self.named_spaces.write().unwrap();
+        if spaces.contains_key(name) {
+            false
+        } else {
+            spaces.insert(name.to_string(), PathMap::new());
+            self.modified.store(true, Ordering::Release);
+            true
+        }
+    }
+
+    /// Check if a named space exists
+    pub fn space_exists(&self, name: &str) -> bool {
+        if name == "self" {
+            return true;
+        }
+        let spaces = self.named_spaces.read().unwrap();
+        spaces.contains_key(name)
+    }
+
+    /// Delete a named space
+    pub fn delete_named_space(&mut self, name: &str) -> bool {
+        self.make_owned();
+        let mut spaces = self.named_spaces.write().unwrap();
+        if spaces.remove(name).is_some() {
+            self.modified.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Create an anonymous space with UUID
+    pub fn create_anonymous_space(&mut self, uuid: String) {
+        self.make_owned();
+        let mut spaces = self.anonymous_spaces.write().unwrap();
+        spaces.insert(uuid, PathMap::new());
+        self.modified.store(true, Ordering::Release);
+    }
+
+    /// Get PathMap for an anonymous space by UUID
+    pub fn get_anonymous_space(&self, uuid: &str) -> Option<PathMap<()>> {
+        let spaces = self.anonymous_spaces.read().unwrap();
+        spaces.get(uuid).cloned()
+    }
+
+    /// Add atom to an anonymous space
+    pub fn add_to_anonymous_space(&mut self, uuid: &str, value: &MettaValue) {
+        use crate::backend::mork_convert::{metta_to_mork_bytes, ConversionContext};
+
+        let is_ground = !Self::contains_variables(value);
+        let mork_str = value.to_mork_string();
+        let mork_bytes = mork_str.as_bytes();
+
+        let mut spaces = self.anonymous_spaces.write().unwrap();
+        let space_map = spaces.entry(uuid.to_string()).or_insert_with(PathMap::new);
+
+        if is_ground {
+            // Ground values: try direct MORK byte conversion
+            let space = Space {
+                btm: space_map.clone(),
+                sm: self.shared_mapping.clone(),
+                mmaps: HashMap::new(),
+            };
+            let mut ctx = ConversionContext::new();
+
+            if let Ok(mork_bytes_direct) = metta_to_mork_bytes(value, &space, &mut ctx) {
+                space_map.insert(&mork_bytes_direct, ());
+                return;
+            }
+        }
+
+        // Fallback: use string path
+        let mut space = Space {
+            btm: space_map.clone(),
+            sm: self.shared_mapping.clone(),
+            mmaps: HashMap::new(),
+        };
+
+        if let Ok(_count) = space.load_all_sexpr_impl(mork_bytes, true) {
+            *space_map = space.btm;
+        }
+    }
+
+    /// Remove atom from an anonymous space
+    pub fn remove_from_anonymous_space(&mut self, uuid: &str, value: &MettaValue) {
+        use crate::backend::mork_convert::{metta_to_mork_bytes, ConversionContext};
+
+        let mork_str = value.to_mork_string();
+        let mork_bytes = mork_str.as_bytes();
+        let is_ground = !Self::contains_variables(value);
+
+        let mut spaces = self.anonymous_spaces.write().unwrap();
+        if let Some(space_map) = spaces.get_mut(uuid) {
+            if is_ground {
+                let space = Space {
+                    btm: space_map.clone(),
+                    sm: self.shared_mapping.clone(),
+                    mmaps: HashMap::new(),
+                };
+                let mut ctx = ConversionContext::new();
+
+                if let Ok(mork_bytes_direct) = metta_to_mork_bytes(value, &space, &mut ctx) {
+                    space_map.remove(&mork_bytes_direct);
+                    return;
+                }
+            }
+
+            // Fallback: use string path
+            space_map.remove(mork_bytes);
+        }
+    }
+
+    /// Match pattern in an anonymous space
+    pub fn match_anonymous_space(
+        &self,
+        uuid: &str,
+        pattern: &MettaValue,
+        template: &MettaValue,
+    ) -> Vec<MettaValue> {
+        use crate::backend::eval::{apply_bindings, pattern_match};
+
+        // Get the anonymous space (return empty if doesn't exist)
+        let spaces = self.anonymous_spaces.read().unwrap();
+        let space_map = match spaces.get(uuid) {
+            Some(map) => map.clone(),
+            None => return vec![], // Space doesn't exist
+        };
+        drop(spaces);
+
+        // Create a Space for iteration
+        let space = Space {
+            btm: space_map,
+            sm: self.shared_mapping.clone(),
+            mmaps: HashMap::new(),
+        };
+
+        let mut rz = space.btm.read_zipper();
+        let mut results = Vec::new();
+
+        // Iterate through all values in the space
+        while rz.to_next_val() {
+            let expr = mork_expr::Expr {
+                ptr: rz.path().as_ptr().cast_mut(),
+            };
+
+            if let Ok(atom) = Self::mork_expr_to_metta_value(&expr, &space) {
+                if let Some(bindings) = pattern_match(pattern, &atom) {
+                    let instantiated = apply_bindings(template, &bindings);
+                    results.push(instantiated);
+                }
+            }
+        }
+
+        results
+    }
+
+    pub fn bind_anonymous_to_name(&mut self, name: &str, uuid: &str) -> bool {
+        self.make_owned();
+        
+        // Check if name already exists
+        let named = self.named_spaces.read().unwrap();
+        if named.contains_key(name) {
+            return false; // Already bound
+        }
+        drop(named);
+
+        // Get the anonymous space
+        let mut anon = self.anonymous_spaces.write().unwrap();
+        if let Some(pathmap) = anon.remove(uuid) {
+            drop(anon);
+            // Move to named spaces
+            let mut named = self.named_spaces.write().unwrap();
+            named.insert(name.to_string(), pathmap);
+            self.modified.store(true, Ordering::Release);
+            true
+        } else {
+            false // Anonymous space doesn't exist
         }
     }
 }
@@ -1498,6 +1692,7 @@ impl Clone for Environment {
             type_index: Arc::clone(&self.type_index),
             type_index_dirty: Arc::clone(&self.type_index_dirty),
             named_spaces: Arc::clone(&self.named_spaces),
+            anonymous_spaces: Arc::clone(&self.anonymous_spaces),
         }
     }
 }

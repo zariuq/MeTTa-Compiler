@@ -46,6 +46,10 @@ pub fn metta_value_to_par(value: &MettaValue) -> Par {
                 s.replace("\\", "\\\\").replace("\"", "\\\"")
             ))
         }
+        MettaValue::Space(uuid) => {
+            // Represent space as tagged string
+            create_string_par(format!("(space \"{}\")", uuid))
+        }
         MettaValue::Nil => {
             // Represent Nil as empty Par
             Par::default()

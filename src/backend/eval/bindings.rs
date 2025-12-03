@@ -4,6 +4,57 @@ use std::sync::Arc;
 
 use super::{apply_bindings, eval, pattern_match};
 
+/// Format a MettaValue for printing (without outer brackets)
+fn format_for_print(value: &MettaValue) -> String {
+    match value {
+        MettaValue::Atom(s) => s.clone(),
+        MettaValue::Bool(b) => b.to_string(),
+        MettaValue::Long(n) => n.to_string(),
+        MettaValue::Float(f) => f.to_string(),
+        MettaValue::String(s) => s.clone(), // Don't add quotes for println
+        MettaValue::Nil => "Nil".to_string(),
+        MettaValue::Error(msg, details) => {
+            format!("(Error {} {})", msg, format_for_print(details))
+        }
+        MettaValue::Type(t) => format!("Type({})", format_for_print(t)),
+        MettaValue::Space(uuid) => format!("GroundingSpace-{}", &uuid[..8]),
+        MettaValue::SExpr(items) => {
+            let formatted: Vec<String> = items.iter().map(format_for_print).collect();
+            format!("({})", formatted.join(" "))
+        }
+    }
+}
+
+/// Evaluate println: (println arg)
+/// Prints the argument to stdout and returns true
+/// Compatible with PeTTa's println! which returns true
+pub(super) fn eval_println(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.is_empty() {
+        let err = MettaValue::Error(
+            "println requires at least 1 argument. Usage: (println value)".to_string(),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    // Evaluate the first argument
+    let (results, new_env) = eval(args[0].clone(), env);
+
+    if results.is_empty() {
+        return (vec![MettaValue::Nil], new_env);
+    }
+
+    // Print each result
+    for result in &results {
+        println!("{}", format_for_print(result));
+    }
+
+    // Return () (allows use in let bindings, fire-and-forget semantics)
+    (vec![MettaValue::Nil], new_env)
+}
+
 /// Generate helpful message for pattern mismatch in let bindings
 fn pattern_mismatch_suggestion(pattern: &MettaValue, value: &MettaValue) -> String {
     let pattern_arity = match pattern {
@@ -118,6 +169,120 @@ pub(super) fn eval_let(items: Vec<MettaValue>, env: Environment) -> EvalResult {
     }
 
     (all_results, value_env)
+}
+
+/// Evaluate let*: (let* ((pattern1 value1) (pattern2 value2) ...) body)
+/// Sequential let bindings where each binding can reference previous ones
+/// Example: (let* (($a 1) ($b (+ $a 1))) (+ $a $b)) → 3
+pub(super) fn eval_let_star(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() < 2 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "let* requires at least 2 arguments, got {}. Usage: (let* ((pattern value) ...) body)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let bindings_expr = &args[0];
+    let body = &args[1];
+
+    // Extract bindings list
+    let bindings = match bindings_expr {
+        MettaValue::SExpr(items) => items,
+        _ => {
+            let err = MettaValue::Error(
+                format!(
+                    "let* bindings must be a list, got: {}",
+                    super::friendly_value_repr(bindings_expr)
+                ),
+                Arc::new(MettaValue::SExpr(args.to_vec())),
+            );
+            return (vec![err], env);
+        }
+    };
+
+    // Process bindings sequentially (left to right)
+    let current_env = env;
+    let mut current_body = body.clone();
+
+    for binding in bindings.iter().rev() {
+        // Each binding is (pattern value)
+        let (pattern, value_expr) = match binding {
+            MettaValue::SExpr(items) if items.len() == 2 => (&items[0], &items[1]),
+            _ => {
+                let err = MettaValue::Error(
+                    format!(
+                        "let* binding must be (pattern value), got: {}",
+                        super::friendly_value_repr(binding)
+                    ),
+                    Arc::new(MettaValue::SExpr(args.to_vec())),
+                );
+                return (vec![err], current_env);
+            }
+        };
+
+        // Create nested let: (let pattern value current_body)
+        current_body = MettaValue::SExpr(vec![
+            MettaValue::Atom("let".to_string()),
+            pattern.clone(),
+            value_expr.clone(),
+            current_body,
+        ]);
+    }
+
+    // Evaluate the nested structure
+    eval(current_body, current_env)
+}
+
+/// Evaluate progn: (progn expr1 expr2 ... exprN)
+/// Evaluates all expressions sequentially and returns the result of the LAST one
+/// Example: (progn (println "step1") (println "step2") 42) → prints both, returns 42
+pub(super) fn eval_progn(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.is_empty() {
+        return (vec![MettaValue::Nil], env);
+    }
+
+    let mut current_env = env;
+    let mut last_results = vec![MettaValue::Nil];
+
+    // Evaluate each expression in sequence
+    for expr in args {
+        let (results, new_env) = eval(expr.clone(), current_env);
+        current_env = new_env;
+        last_results = results;
+    }
+
+    (last_results, current_env)
+}
+
+/// Evaluate prog1: (prog1 expr1 expr2 ... exprN)
+/// Evaluates all expressions sequentially and returns the result of the FIRST one
+/// Example: (prog1 42 (println "side effect")) → prints, returns 42
+pub(super) fn eval_prog1(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.is_empty() {
+        return (vec![MettaValue::Nil], env);
+    }
+
+    // Evaluate first expression and save result
+    let (first_results, mut current_env) = eval(args[0].clone(), env);
+
+    // Evaluate remaining expressions for side effects
+    for expr in &args[1..] {
+        let (_results, new_env) = eval(expr.clone(), current_env);
+        current_env = new_env;
+    }
+
+    (first_results, current_env)
 }
 
 #[cfg(test)]

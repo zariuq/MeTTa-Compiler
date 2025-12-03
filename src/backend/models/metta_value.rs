@@ -22,6 +22,8 @@ pub enum MettaValue {
     Error(String, Arc<MettaValue>),
     /// A type (first-class types as atoms, Arc for O(1) clone)
     Type(Arc<MettaValue>),
+    /// A space reference (anonymous or bound to name via &name)
+    Space(String),
 }
 
 impl MettaValue {
@@ -41,7 +43,7 @@ impl MettaValue {
     }
 
     /// Check if this value is a ground type (non-reducible literal)
-    /// Ground types: Bool, Long, Float, String, Nil
+    /// Ground types: Bool, Long, Float, String, Nil, Space
     /// Returns true if the value doesn't require further evaluation
     pub fn is_ground_type(&self) -> bool {
         matches!(
@@ -51,6 +53,7 @@ impl MettaValue {
                 | MettaValue::Float(_)
                 | MettaValue::String(_)
                 | MettaValue::Nil
+                | MettaValue::Space(_)
         )
     }
 
@@ -115,6 +118,9 @@ impl MettaValue {
 
             // Types must be structurally equivalent
             (MettaValue::Type(a), MettaValue::Type(b)) => a.structurally_equivalent(b),
+
+            // Spaces must have same ID
+            (MettaValue::Space(a), MettaValue::Space(b)) => a == b,
 
             _ => false,
         }
@@ -193,6 +199,7 @@ impl MettaValue {
                 format!("(error \"{}\" {})", msg, details.to_mork_string())
             }
             MettaValue::Type(t) => t.to_mork_string(),
+            MettaValue::Space(id) => format!("(space \"{}\")", id),
         }
     }
 
@@ -220,6 +227,9 @@ impl MettaValue {
             }
             MettaValue::Type(t) => {
                 format!(r#"{{"type":"metatype","value":{}}}"#, t.to_json_string())
+            }
+            MettaValue::Space(id) => {
+                format!(r#"{{"type":"space","id":"{}"}}"#, escape_json(id))
             }
         }
     }
@@ -277,6 +287,10 @@ impl std::hash::Hash for MettaValue {
             MettaValue::Type(t) => {
                 8u8.hash(state);
                 t.hash(state);
+            }
+            MettaValue::Space(id) => {
+                9u8.hash(state);
+                id.hash(state);
             }
         }
     }

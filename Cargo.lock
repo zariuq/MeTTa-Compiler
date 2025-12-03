@@ -1908,6 +1908,7 @@ dependencies = [
  "toml",
  "tree-sitter",
  "tree-sitter-metta",
+ "uuid",
 ]
 
 [[package]]

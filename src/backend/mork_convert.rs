@@ -124,6 +124,12 @@ fn write_metta_value(
             write_symbol(quoted.as_bytes(), space, ez)?;
         }
 
+        MettaValue::Space(uuid) => {
+            // Write space as a tagged symbol
+            let tagged = format!("(space \"{}\")", uuid);
+            write_symbol(tagged.as_bytes(), space, ez)?;
+        }
+
         MettaValue::Nil => {
             // Empty list
             ez.write_arity(0);

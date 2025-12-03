@@ -251,8 +251,11 @@ impl TreeSitterMettaParser {
         let span = self.node_span(node);
 
         match node.kind() {
-            // Variables: $var, &var, 'var
+            // Variables: $var
             "variable" => Ok(vec![SExpr::Atom(text, Some(span))]),
+
+            // Space references: &name (e.g., &self, &kb, &workspace)
+            "space_reference" => Ok(vec![SExpr::Atom(text, Some(span))]),
 
             // Wildcard: _
             "wildcard" => Ok(vec![SExpr::Atom(text, Some(span))]),

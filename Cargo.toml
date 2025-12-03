@@ -88,6 +88,9 @@ ropey = "1.6"
 # LRU cache for pattern caching optimization
 lru = "0.12"
 
+# UUID - Generate unique identifiers for anonymous spaces
+uuid = { version = "1.0", features = ["v4"] }
+
 # SmallVec - Stack-allocated vector for optimizing pattern matching bindings
 smallvec = "1.11"
 

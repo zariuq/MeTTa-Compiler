@@ -216,6 +216,9 @@ fn metta_value_to_json_string(value: &MettaValue) -> String {
                 metta_value_to_json_string(t)
             )
         }
+        MettaValue::Space(uuid) => {
+            format!(r#"{{"type":"space","id":"{}"}}"#, escape_json(uuid))
+        }
     }
 }
 

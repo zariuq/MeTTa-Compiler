@@ -18,6 +18,9 @@
 ; Returns: [alice, charlie]
 
 ; Example 2: Remove from named space
+; First, create the database space
+!(bind-space &database)
+
 !(add-atom &database (fact (temperature 20)))
 !(add-atom &database (fact (humidity 65)))
 !(add-atom &database (fact (pressure 1013)))
@@ -34,6 +37,9 @@
 ; Returns: [(humidity 65), (pressure 1013)]
 
 ; Example 3: ATP use case - clause database cleanup
+; First, create the clauses space
+!(bind-space &clauses)
+
 !(add-atom &clauses (clause ((lit p) ((nlit q) ()))))
 !(add-atom &clauses (clause ((lit p) ())))  ; Subsumes the first one!
 
