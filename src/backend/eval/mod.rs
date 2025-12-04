@@ -115,6 +115,7 @@ const SPECIAL_FORMS: &[&str] = &[
     "let",
     "let*",
     "println",
+    "println!",  // HE convention: I/O operations have !
     "progn",
     "prog1",
     ":",
@@ -124,8 +125,10 @@ const SPECIAL_FORMS: &[&str] = &[
     "filter-atom",
     "foldl-atom",
     "bind-space",
+    "bind-space!",  // HE convention: global namespace bindings have !
     "new-space",
     "delete-space",
+    "delete-space!",  // Global effect: destroys a space
     "add-atom",
     "remove-atom",
     "size-atom",
@@ -531,9 +534,13 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "switch-internal" => {
                 return EvalStep::Done(control_flow::eval_switch_internal_handler(items, env))
             }
+            "select" => return EvalStep::Done(control_flow::eval_select(items, env)),
+            "superpose" => return EvalStep::Done(control_flow::eval_superpose(items, env)),
+            "collapse" => return EvalStep::Done(control_flow::eval_collapse(items, env)),
             "let" => return EvalStep::Done(bindings::eval_let(items, env)),
             "let*" => return EvalStep::Done(bindings::eval_let_star(items, env)),
-            "println" => return EvalStep::Done(bindings::eval_println(items, env)),
+            // println! is HE convention; println kept for backward compatibility
+            "println" | "println!" => return EvalStep::Done(bindings::eval_println(items, env)),
             "progn" => return EvalStep::Done(bindings::eval_progn(items, env)),
             "prog1" => return EvalStep::Done(bindings::eval_prog1(items, env)),
             ":" => return EvalStep::Done(types::eval_type_assertion(items, env)),
@@ -549,8 +556,10 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "add-atom" => return EvalStep::Done(space::eval_add_atom(items, env)),
             "remove-atom" => return EvalStep::Done(space::eval_remove_atom(items, env)),
             "new-space" => return EvalStep::Done(space::eval_new_space(items, env)),
-            "delete-space" => return EvalStep::Done(space::eval_delete_space(items, env)),
-            "bind-space" => return EvalStep::Done(space::eval_bind_space(items, env)),
+            // delete-space! has ! because it destroys a space (global effect)
+            "delete-space" | "delete-space!" => return EvalStep::Done(space::eval_delete_space(items, env)),
+            // bind-space! has ! because it binds a name globally (HE: bind!)
+            "bind-space" | "bind-space!" => return EvalStep::Done(space::eval_bind_space(items, env)),
             "import!" => return EvalStep::Done(io::eval_import(items, env)),
             "get-args" => return EvalStep::Done(io::eval_get_args(items, env)),
             "get-arg" => return EvalStep::Done(io::eval_get_arg(items, env)),

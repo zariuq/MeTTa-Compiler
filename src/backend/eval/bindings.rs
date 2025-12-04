@@ -25,15 +25,19 @@ fn format_for_print(value: &MettaValue) -> String {
     }
 }
 
-/// Evaluate println: (println arg)
-/// Prints the argument to stdout and returns true
-/// Compatible with PeTTa's println! which returns true
+/// Evaluate println: (println! arg)
+/// Prints the argument to stdout and returns ()
+/// Following HE convention: println! takes exactly 1 argument
 pub(super) fn eval_println(items: Vec<MettaValue>, env: Environment) -> EvalResult {
     let args = &items[1..];
 
-    if args.is_empty() {
+    // Strict validation: exactly 1 argument (HE compatible)
+    if args.len() != 1 {
         let err = MettaValue::Error(
-            "println requires at least 1 argument. Usage: (println value)".to_string(),
+            format!(
+                "println! requires exactly 1 argument, got {}. Usage: (println! value)",
+                args.len()
+            ),
             Arc::new(MettaValue::SExpr(args.to_vec())),
         );
         return (vec![err], env);

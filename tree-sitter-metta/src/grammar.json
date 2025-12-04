@@ -179,7 +179,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PREC",
-        "value": 3,
+        "value": 11,
         "content": {
           "type": "CHOICE",
           "members": [
@@ -199,7 +199,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PREC",
-        "value": 3,
+        "value": 11,
         "content": {
           "type": "PATTERN",
           "value": "%[A-Za-z][A-Za-z0-9_-]*%"
@@ -210,7 +210,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PREC",
-        "value": 2,
+        "value": 10,
         "content": {
           "type": "PATTERN",
           "value": "[^\\s()\\[\\]{};$!?'\"&\\d+\\-*/_:=><|,@.][^\\s()\\[\\]{};]*",

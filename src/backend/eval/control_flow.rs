@@ -55,6 +55,164 @@ pub(super) fn eval_if(items: Vec<MettaValue>, env: Environment) -> EvalResult {
     }
 }
 
+/// Select first k results from an expression evaluation
+/// Usage: (select k expr)
+/// Similar to Prolog's once/1 (when k=1), but generalized to select first k results
+pub(super) fn eval_select(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() < 2 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "select requires exactly 2 arguments, got {}. Usage: (select k expr)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let k_expr = &args[0];
+    let expr = &args[1];
+
+    // Evaluate k to get the number
+    let (k_results, k_env) = eval(k_expr.clone(), env);
+
+    // Check for error in k
+    if let Some(first) = k_results.first() {
+        if matches!(first, MettaValue::Error(_, _)) {
+            return (vec![first.clone()], k_env);
+        }
+
+        // Extract k as usize
+        let k_val = match first {
+            MettaValue::Long(n) => {
+                if *n < 0 {
+                    let err = MettaValue::Error(
+                        format!("select: k must be non-negative, got {}", n),
+                        Arc::new(first.clone()),
+                    );
+                    return (vec![err], k_env);
+                }
+                *n as usize
+            }
+            MettaValue::Float(f) => {
+                if *f < 0.0 {
+                    let err = MettaValue::Error(
+                        format!("select: k must be non-negative, got {}", f),
+                        Arc::new(first.clone()),
+                    );
+                    return (vec![err], k_env);
+                }
+                *f as usize
+            }
+            _ => {
+                let err = MettaValue::Error(
+                    format!("select: k must be a number, got {:?}", first),
+                    Arc::new(first.clone()),
+                );
+                return (vec![err], k_env);
+            }
+        };
+
+        // Evaluate the expression and truncate to first k results
+        let (mut results, final_env) = eval(expr.clone(), k_env);
+        results.truncate(k_val);
+        (results, final_env)
+    } else {
+        // No result from k - return error
+        let err = MettaValue::Error(
+            "select: k expression produced no results".to_string(),
+            Arc::new(k_expr.clone()),
+        );
+        (vec![err], k_env)
+    }
+}
+
+/// Superpose: takes a single S-expression and produces multiple results (one per element)
+/// Usage: (superpose (A B C D)) → {A, B, C, D}
+/// This is the inverse of collapse - it "explodes" a list into multiple branches
+pub(super) fn eval_superpose(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() != 1 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "superpose requires exactly 1 argument, got {}. Usage: (superpose (A B C D))",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let expr = &args[0];
+
+    // Evaluate the argument to get the list
+    let (list_results, list_env) = eval(expr.clone(), env);
+
+    // Check for error in evaluation
+    if let Some(first) = list_results.first() {
+        if matches!(first, MettaValue::Error(_, _)) {
+            return (vec![first.clone()], list_env);
+        }
+    }
+
+    // Extract first result (should be an S-expression)
+    match list_results.first() {
+        Some(MettaValue::SExpr(elements)) => {
+            // Return each element as a separate result (scatter operation)
+            (elements.clone(), list_env)
+        }
+        Some(MettaValue::Nil) => {
+            // Nil (empty S-expression) returns 0 results
+            (vec![], list_env)
+        }
+        Some(other) => {
+            let err = MettaValue::Error(
+                format!("superpose expects S-expression, got {:?}", other),
+                Arc::new(other.clone()),
+            );
+            (vec![err], list_env)
+        }
+        None => {
+            // Empty result - return empty vec
+            (vec![], list_env)
+        }
+    }
+}
+
+/// Collapse: collects all alternatives from an expression into a single S-expression
+/// Usage: (collapse (color)) where (color) → {red, green, blue}
+/// Returns: ONE result containing (red green blue)
+/// This is the inverse of superpose - it "gathers" multiple branches into one list
+pub(super) fn eval_collapse(items: Vec<MettaValue>, env: Environment) -> EvalResult {
+    let args = &items[1..];
+
+    if args.len() != 1 {
+        let got = args.len();
+        let err = MettaValue::Error(
+            format!(
+                "collapse requires exactly 1 argument, got {}. Usage: (collapse expr)",
+                got
+            ),
+            Arc::new(MettaValue::SExpr(args.to_vec())),
+        );
+        return (vec![err], env);
+    }
+
+    let expr = &args[0];
+
+    // Evaluate the expression to get ALL results (gather operation)
+    let (results, final_env) = eval(expr.clone(), env);
+
+    // Wrap ALL results into ONE S-expression
+    let collapsed = MettaValue::SExpr(results);
+    (vec![collapsed], final_env) // Return exactly ONE result!
+}
+
 /// Subsequently tests multiple pattern-matching conditions (second argument) for the
 /// given value (first argument)
 pub(super) fn eval_case(items: Vec<MettaValue>, env: Environment) -> EvalResult {
@@ -1068,5 +1226,646 @@ mod tests {
             results2[0],
             MettaValue::String("fallback matched".to_string())
         );
+    }
+
+    // ============================================================================
+    // select tests
+    // ============================================================================
+
+    #[test]
+    fn test_select_basic_first() {
+        let mut env = Environment::new();
+
+        // Define a function that returns multiple results
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(1),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(2),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(3),
+        });
+
+        // (select 1 (multi 42)) should return only [1]
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(1),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Long(42),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(1));
+    }
+
+    #[test]
+    fn test_select_first_two() {
+        let mut env = Environment::new();
+
+        // Define a function that returns multiple results
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(1),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(2),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(3),
+        });
+
+        // (select 2 (multi 42)) should return [1, 2]
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(2),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Long(42),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], MettaValue::Long(1));
+        assert_eq!(results[1], MettaValue::Long(2));
+    }
+
+    #[test]
+    fn test_select_zero_results() {
+        let env = Environment::new();
+
+        // (select 0 (+ 1 2)) should return []
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(0),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("+".to_string()),
+                MettaValue::Long(1),
+                MettaValue::Long(2),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_select_more_than_available() {
+        let mut env = Environment::new();
+
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(1),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Long(2),
+        });
+
+        // (select 10 (multi 42)) should return [1, 2] (all available)
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(10),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("multi".to_string()),
+                MettaValue::Long(42),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], MettaValue::Long(1));
+        assert_eq!(results[1], MettaValue::Long(2));
+    }
+
+    #[test]
+    fn test_select_with_float_k() {
+        let env = Environment::new();
+
+        // (select 2.7 (+ 1 2)) should truncate to 2
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Float(2.7),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("+".to_string()),
+                MettaValue::Long(1),
+                MettaValue::Long(2),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Long(3));
+    }
+
+    #[test]
+    fn test_select_negative_k_error() {
+        let env = Environment::new();
+
+        // (select -1 (+ 1 2)) should return error
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(-1),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("+".to_string()),
+                MettaValue::Long(1),
+                MettaValue::Long(2),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("non-negative"));
+            }
+            _ => panic!("Expected error for negative k"),
+        }
+    }
+
+    #[test]
+    fn test_select_non_numeric_k_error() {
+        let env = Environment::new();
+
+        // (select "hello" (+ 1 2)) should return error
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::String("hello".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("+".to_string()),
+                MettaValue::Long(1),
+                MettaValue::Long(2),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("must be a number"));
+            }
+            _ => panic!("Expected error for non-numeric k"),
+        }
+    }
+
+    #[test]
+    fn test_select_missing_arguments() {
+        let env = Environment::new();
+
+        // (select 1) - missing expression
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(1),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("requires exactly 2 arguments"));
+            }
+            _ => panic!("Expected error for missing arguments"),
+        }
+    }
+
+    #[test]
+    fn test_select_no_expression() {
+        let env = Environment::new();
+
+        // (select) - no arguments at all
+        let value = MettaValue::SExpr(vec![MettaValue::Atom("select".to_string())]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("requires exactly 2 arguments"));
+                assert!(msg.contains("got 0"));
+            }
+            _ => panic!("Expected error for no arguments"),
+        }
+    }
+
+    #[test]
+    fn test_select_with_expression_returning_one_result() {
+        let env = Environment::new();
+
+        // Test with an undefined function that returns the expression unevaluated
+        let undefined_expr = MettaValue::SExpr(vec![
+            MettaValue::Atom("undefined-function".to_string()),
+            MettaValue::Long(42),
+        ]);
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(5),
+            undefined_expr.clone(),
+        ]);
+
+        let (results, _) = eval(value, env);
+        // Undefined function returns the expression itself, select returns 1 result
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], undefined_expr);
+    }
+
+    #[test]
+    fn test_select_prolog_once_style() {
+        let mut env = Environment::new();
+
+        // Like Prolog's once/1 - select 1 for deterministic choice
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("choice".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Atom("first".to_string()),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("choice".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Atom("second".to_string()),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("choice".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Atom("third".to_string()),
+        });
+
+        // (select 1 (choice foo)) - Prolog once/1 style
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(1),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("choice".to_string()),
+                MettaValue::Atom("foo".to_string()),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Atom("first".to_string()));
+    }
+
+    // ===== Tests for superpose =====
+
+    #[test]
+    fn test_superpose_basic() {
+        let env = Environment::new();
+
+        // (superpose (A B C D))
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("superpose".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("A".to_string()),
+                MettaValue::Atom("B".to_string()),
+                MettaValue::Atom("C".to_string()),
+                MettaValue::Atom("D".to_string()),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 4);
+        assert_eq!(results[0], MettaValue::Atom("A".to_string()));
+        assert_eq!(results[1], MettaValue::Atom("B".to_string()));
+        assert_eq!(results[2], MettaValue::Atom("C".to_string()));
+        assert_eq!(results[3], MettaValue::Atom("D".to_string()));
+    }
+
+    #[test]
+    fn test_superpose_with_nested_sexprs() {
+        let env = Environment::new();
+
+        // (superpose ((a 1) (b 2) (c 3)))
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("superpose".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::SExpr(vec![
+                    MettaValue::Atom("a".to_string()),
+                    MettaValue::Long(1),
+                ]),
+                MettaValue::SExpr(vec![
+                    MettaValue::Atom("b".to_string()),
+                    MettaValue::Long(2),
+                ]),
+                MettaValue::SExpr(vec![
+                    MettaValue::Atom("c".to_string()),
+                    MettaValue::Long(3),
+                ]),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 3);
+        assert!(matches!(results[0], MettaValue::SExpr(_)));
+    }
+
+    #[test]
+    fn test_superpose_empty_list() {
+        let env = Environment::new();
+
+        // (superpose ())
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("superpose".to_string()),
+            MettaValue::SExpr(vec![]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_superpose_single_element() {
+        let env = Environment::new();
+
+        // (superpose (X))
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("superpose".to_string()),
+            MettaValue::SExpr(vec![MettaValue::Atom("X".to_string())]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], MettaValue::Atom("X".to_string()));
+    }
+
+    #[test]
+    fn test_superpose_wrong_args() {
+        let env = Environment::new();
+
+        // (superpose) - no arguments
+        let value = MettaValue::SExpr(vec![MettaValue::Atom("superpose".to_string())]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("requires exactly 1 argument"));
+            }
+            _ => panic!("Expected error for missing arguments"),
+        }
+    }
+
+    #[test]
+    fn test_superpose_non_sexpr_input() {
+        let env = Environment::new();
+
+        // (superpose 42) - not an S-expression
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("superpose".to_string()),
+            MettaValue::Long(42),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("expects S-expression"));
+            }
+            _ => panic!("Expected error for non-SExpr input"),
+        }
+    }
+
+    // ===== Tests for collapse =====
+
+    #[test]
+    fn test_collapse_basic() {
+        let mut env = Environment::new();
+
+        // Define multiple matching rules
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("color".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Atom("red".to_string()),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("color".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Atom("green".to_string()),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("color".to_string()),
+                MettaValue::Atom("$x".to_string()),
+            ]),
+            rhs: MettaValue::Atom("blue".to_string()),
+        });
+
+        // (collapse (color apple))
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("collapse".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("color".to_string()),
+                MettaValue::Atom("apple".to_string()),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        // Should return exactly ONE result, which is an S-expression containing all three colors
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(elements) => {
+                assert_eq!(elements.len(), 3);
+                assert_eq!(elements[0], MettaValue::Atom("red".to_string()));
+                assert_eq!(elements[1], MettaValue::Atom("green".to_string()));
+                assert_eq!(elements[2], MettaValue::Atom("blue".to_string()));
+            }
+            _ => panic!("Expected S-expression result from collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_single_result() {
+        let env = Environment::new();
+
+        // (collapse (+ 2 3)) - single result
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("collapse".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("+".to_string()),
+                MettaValue::Long(2),
+                MettaValue::Long(3),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(elements) => {
+                assert_eq!(elements.len(), 1);
+                assert_eq!(elements[0], MettaValue::Long(5));
+            }
+            _ => panic!("Expected S-expression result from collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_empty_result() {
+        let env = Environment::new();
+
+        // (collapse (undefined-function)) - no results
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("collapse".to_string()),
+            MettaValue::SExpr(vec![MettaValue::Atom("undefined-function".to_string())]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(elements) => {
+                // Undefined function returns the unevaluated expression
+                assert_eq!(elements.len(), 1);
+            }
+            _ => panic!("Expected S-expression result from collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_superpose_roundtrip() {
+        let env = Environment::new();
+
+        // (collapse (superpose (X Y Z))) should return (X Y Z)
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("collapse".to_string()),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("superpose".to_string()),
+                MettaValue::SExpr(vec![
+                    MettaValue::Atom("X".to_string()),
+                    MettaValue::Atom("Y".to_string()),
+                    MettaValue::Atom("Z".to_string()),
+                ]),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(elements) => {
+                assert_eq!(elements.len(), 3);
+                assert_eq!(elements[0], MettaValue::Atom("X".to_string()));
+                assert_eq!(elements[1], MettaValue::Atom("Y".to_string()));
+                assert_eq!(elements[2], MettaValue::Atom("Z".to_string()));
+            }
+            _ => panic!("Expected S-expression result from collapse"),
+        }
+    }
+
+    #[test]
+    fn test_collapse_wrong_args() {
+        let env = Environment::new();
+
+        // (collapse) - no arguments
+        let value = MettaValue::SExpr(vec![MettaValue::Atom("collapse".to_string())]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::Error(msg, _) => {
+                assert!(msg.contains("requires exactly 1 argument"));
+            }
+            _ => panic!("Expected error for missing arguments"),
+        }
+    }
+
+    #[test]
+    fn test_select_with_superpose() {
+        let env = Environment::new();
+
+        // (select 2 (superpose (A B C D))) - should return first 2 elements
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("select".to_string()),
+            MettaValue::Long(2),
+            MettaValue::SExpr(vec![
+                MettaValue::Atom("superpose".to_string()),
+                MettaValue::SExpr(vec![
+                    MettaValue::Atom("A".to_string()),
+                    MettaValue::Atom("B".to_string()),
+                    MettaValue::Atom("C".to_string()),
+                    MettaValue::Atom("D".to_string()),
+                ]),
+            ]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], MettaValue::Atom("A".to_string()));
+        assert_eq!(results[1], MettaValue::Atom("B".to_string()));
+    }
+
+    #[test]
+    fn test_collapse_with_nested_expressions() {
+        let mut env = Environment::new();
+
+        // Add rules that return nested S-expressions
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![MettaValue::Atom("pair".to_string())]),
+            rhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("a".to_string()),
+                MettaValue::Long(1),
+            ]),
+        });
+        env.add_rule(Rule {
+            lhs: MettaValue::SExpr(vec![MettaValue::Atom("pair".to_string())]),
+            rhs: MettaValue::SExpr(vec![
+                MettaValue::Atom("b".to_string()),
+                MettaValue::Long(2),
+            ]),
+        });
+
+        // (collapse (pair))
+        let value = MettaValue::SExpr(vec![
+            MettaValue::Atom("collapse".to_string()),
+            MettaValue::SExpr(vec![MettaValue::Atom("pair".to_string())]),
+        ]);
+
+        let (results, _) = eval(value, env);
+        assert_eq!(results.len(), 1);
+        match &results[0] {
+            MettaValue::SExpr(elements) => {
+                assert_eq!(elements.len(), 2);
+                assert!(matches!(elements[0], MettaValue::SExpr(_)));
+                assert!(matches!(elements[1], MettaValue::SExpr(_)));
+            }
+            _ => panic!("Expected S-expression result from collapse"),
+        }
     }
 }
