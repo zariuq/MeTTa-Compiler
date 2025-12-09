@@ -64,6 +64,13 @@ pub struct Environment {
     /// RwLock allows concurrent reads (cache hits don't require exclusive lock)
     pattern_cache: Arc<RwLock<LruCache<MettaValue, Vec<u8>>>>,
 
+    /// Memoization cache: LRU cache for function call results
+    /// Maps function calls (e.g., (fib 10)) -> evaluation results
+    /// Cache size: 10000 entries (larger for recursive functions)
+    /// Expected speedup: 100-1000x for recursive functions like Fibonacci
+    /// RwLock allows concurrent reads for parallel evaluation
+    memo_cache: Arc<RwLock<LruCache<MettaValue, Vec<MettaValue>>>>,
+
     /// Fuzzy matcher: Tracks known symbols for "Did you mean?" suggestions
     /// Populated automatically as rules and functions are added to environment
     /// Used to suggest similar symbols when encountering undefined atoms
@@ -122,6 +129,7 @@ impl Environment {
             wildcard_rules: Arc::new(RwLock::new(Vec::new())),
             multiplicities: Arc::new(RwLock::new(HashMap::new())),
             pattern_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(1000).unwrap()))),
+            memo_cache: Arc::new(RwLock::new(LruCache::new(NonZeroUsize::new(10000).unwrap()))),
             fuzzy_matcher: FuzzyMatcher::new(),
             type_index: Arc::new(RwLock::new(None)),
             type_index_dirty: Arc::new(RwLock::new(true)),
@@ -157,6 +165,7 @@ impl Environment {
         let wildcard_rules_data = self.wildcard_rules.read().unwrap().clone();
         let multiplicities_data = self.multiplicities.read().unwrap().clone();
         let pattern_cache_data = self.pattern_cache.read().unwrap().clone();
+        let memo_cache_data = self.memo_cache.read().unwrap().clone();
         let type_index_data = self.type_index.read().unwrap().clone();
         let type_index_dirty_data = *self.type_index_dirty.read().unwrap();
         let named_spaces_data = self.named_spaces.read().unwrap().clone();
@@ -168,6 +177,7 @@ impl Environment {
         self.wildcard_rules = Arc::new(RwLock::new(wildcard_rules_data));
         self.multiplicities = Arc::new(RwLock::new(multiplicities_data));
         self.pattern_cache = Arc::new(RwLock::new(pattern_cache_data));
+        self.memo_cache = Arc::new(RwLock::new(memo_cache_data));
         self.type_index = Arc::new(RwLock::new(type_index_data));
         self.type_index_dirty = Arc::new(RwLock::new(type_index_dirty_data));
         self.named_spaces = Arc::new(RwLock::new(named_spaces_data));
@@ -1003,6 +1013,36 @@ impl Environment {
         false
     }
 
+    /// Check memoization cache for a function call result
+    /// Returns Some(results) if cached, None if not cached
+    /// Only caches ground (variable-free) expressions for deterministic results
+    pub fn check_memo(&self, expr: &MettaValue) -> Option<Vec<MettaValue>> {
+        // Only memoize ground expressions (no variables)
+        if !Self::contains_variables(expr) {
+            let mut cache = self.memo_cache.write().unwrap();
+            cache.get(expr).cloned()
+        } else {
+            None
+        }
+    }
+
+    /// Store a function call result in the memoization cache
+    /// Only caches ground (variable-free) expressions
+    pub fn store_memo(&self, expr: &MettaValue, result: &[MettaValue]) {
+        // Only memoize ground expressions (no variables)
+        if !Self::contains_variables(expr) {
+            let mut cache = self.memo_cache.write().unwrap();
+            cache.put(expr.clone(), result.to_vec());
+        }
+    }
+
+    /// Clear the memoization cache
+    /// Useful when rules change or for memory management
+    pub fn clear_memo_cache(&mut self) {
+        self.make_owned();
+        self.memo_cache.write().unwrap().clear();
+    }
+
     /// Convert MettaValue to MORK bytes with LRU caching
     /// Checks cache first, only converts if not cached
     /// NOTE: Only caches ground (variable-free) patterns for deterministic results
@@ -1499,6 +1539,7 @@ impl Environment {
         // The counts are automatically shared via the Arc
         let multiplicities = self.multiplicities.clone();
         let pattern_cache = self.pattern_cache.clone();
+        let memo_cache = self.memo_cache.clone();
         let fuzzy_matcher = self.fuzzy_matcher.clone();
         let type_index = self.type_index.clone();
         let type_index_dirty = self.type_index_dirty.clone();
@@ -1512,6 +1553,7 @@ impl Environment {
             wildcard_rules,
             multiplicities,
             pattern_cache,
+            memo_cache,
             fuzzy_matcher,
             type_index,
             type_index_dirty,
@@ -1722,6 +1764,7 @@ impl Clone for Environment {
             wildcard_rules: Arc::clone(&self.wildcard_rules),
             multiplicities: Arc::clone(&self.multiplicities),
             pattern_cache: Arc::clone(&self.pattern_cache),
+            memo_cache: Arc::clone(&self.memo_cache),
             fuzzy_matcher: self.fuzzy_matcher.clone(),
             type_index: Arc::clone(&self.type_index),
             type_index_dirty: Arc::clone(&self.type_index_dirty),
@@ -1978,6 +2021,7 @@ mod cow_tests {
         let wildcard_rules_before = StdArc::as_ptr(&clone.wildcard_rules);
         let multiplicities_before = StdArc::as_ptr(&clone.multiplicities);
         let pattern_cache_before = StdArc::as_ptr(&clone.pattern_cache);
+        let memo_cache_before = StdArc::as_ptr(&clone.memo_cache);
         let type_index_before = StdArc::as_ptr(&clone.type_index);
         let type_index_dirty_before = StdArc::as_ptr(&clone.type_index_dirty);
 
@@ -1990,6 +2034,7 @@ mod cow_tests {
         let wildcard_rules_after = StdArc::as_ptr(&clone.wildcard_rules);
         let multiplicities_after = StdArc::as_ptr(&clone.multiplicities);
         let pattern_cache_after = StdArc::as_ptr(&clone.pattern_cache);
+        let memo_cache_after = StdArc::as_ptr(&clone.memo_cache);
         let type_index_after = StdArc::as_ptr(&clone.type_index);
         let type_index_dirty_after = StdArc::as_ptr(&clone.type_index_dirty);
 
@@ -2010,6 +2055,10 @@ mod cow_tests {
         assert_ne!(
             pattern_cache_before, pattern_cache_after,
             "pattern_cache should be deep copied"
+        );
+        assert_ne!(
+            memo_cache_before, memo_cache_after,
+            "memo_cache should be deep copied"
         );
         assert_ne!(
             type_index_before, type_index_after,

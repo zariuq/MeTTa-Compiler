@@ -10,6 +10,8 @@
 mod macros;
 
 mod bindings;
+mod resolution_builtins;
+mod resolution_critical;
 mod control_flow;
 mod errors;
 mod evaluation;
@@ -198,7 +200,31 @@ fn suggest_special_form(op: &str) -> Option<String> {
 /// This is the public entry point that uses iterative evaluation with an explicit work stack
 /// to prevent stack overflow for large expressions.
 pub fn eval(value: MettaValue, env: Environment) -> EvalResult {
-    eval_trampoline(value, env)
+    // Check memo cache for ground expressions
+    if let MettaValue::SExpr(ref items) = value {
+        // Only memoize function calls (atom at head position)
+        if let Some(MettaValue::Atom(_)) = items.first() {
+            if let Some(cached) = env.check_memo(&value) {
+                crate::trace!("Memo hit: {:?} -> {:?}", value, cached);
+                return (cached, env.clone());
+            }
+        }
+    }
+
+    let (results, new_env) = eval_trampoline(value.clone(), env.clone());
+
+    // Store result in memo cache for ground function calls
+    if let MettaValue::SExpr(ref items) = value {
+        if let Some(MettaValue::Atom(_)) = items.first() {
+            // Only cache if we got a concrete result (not error or irreducible)
+            if !results.is_empty() && !matches!(results[0], MettaValue::Error(_, _)) {
+                env.store_memo(&value, &results);
+                crate::trace!("Stored in memo: {:?} -> {:?}", value, results);
+            }
+        }
+    }
+
+    (results, new_env)
 }
 
 /// Iterative evaluation using a trampoline pattern with explicit work stack.
@@ -505,6 +531,36 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
         return EvalStep::Done((vec![MettaValue::Nil], env));
     }
 
+    // FAST PATH: Inline arithmetic and comparison for already-evaluated Long values
+    // This bypasses the trampoline for common operations, avoiding 20+ Arc::clone per call
+    if let Some(MettaValue::Atom(op)) = items.first() {
+        if items.len() == 3 {
+            // Binary operations: (op arg1 arg2)
+            if let (MettaValue::Long(a), MettaValue::Long(b)) = (&items[1], &items[2]) {
+                let result = match op.as_str() {
+                    // Arithmetic operations
+                    "+" => a.checked_add(*b).map(MettaValue::Long),
+                    "-" => a.checked_sub(*b).map(MettaValue::Long),
+                    "*" => a.checked_mul(*b).map(MettaValue::Long),
+                    "/" if *b != 0 => a.checked_div(*b).map(MettaValue::Long),
+                    "%" if *b != 0 => a.checked_rem(*b).map(MettaValue::Long),
+                    // Comparison operations
+                    "<" => Some(MettaValue::Bool(*a < *b)),
+                    "<=" => Some(MettaValue::Bool(*a <= *b)),
+                    ">" => Some(MettaValue::Bool(*a > *b)),
+                    ">=" => Some(MettaValue::Bool(*a >= *b)),
+                    "==" => Some(MettaValue::Bool(*a == *b)),
+                    "!=" => Some(MettaValue::Bool(*a != *b)),
+                    _ => None,
+                };
+
+                if let Some(value) = result {
+                    return EvalStep::Done((vec![value], env));
+                }
+            }
+        }
+    }
+
     // Check for special forms - these are handled directly (they manage their own recursion)
     if let Some(MettaValue::Atom(op)) = items.first() {
         match op.as_str() {
@@ -565,6 +621,71 @@ fn eval_sexpr_step(items: Vec<MettaValue>, env: Environment, depth: usize) -> Ev
             "get-arg" => return EvalStep::Done(io::eval_get_arg(items, env)),
             "size-atom" => return EvalStep::Done(list_ops::eval_size_atom(items, env)),
             "max-atom" => return EvalStep::Done(list_ops::eval_max_atom(items, env)),
+            // Fast resolution built-ins
+            "member?" => {
+                if items.len() == 3 {
+                    if let Some(result) = resolution_builtins::fast_member(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "list-length" => {
+                if items.len() == 2 {
+                    if let Some(result) = resolution_builtins::fast_list_length(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "append-sets" => {
+                if items.len() == 3 {
+                    if let Some(result) = resolution_builtins::fast_append_sets(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "is-empty" => {
+                if items.len() == 2 {
+                    if let Some(result) = resolution_builtins::fast_is_empty(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            // Critical resolution functions for performance
+            "subsumes" => {
+                if items.len() == 3 {
+                    if let Some(result) = resolution_critical::fast_subsumes(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "is-subsumed-by-any" => {
+                if items.len() == 3 {
+                    if let Some(result) = resolution_critical::fast_is_subsumed_by_any(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "resolve" => {
+                if items.len() == 3 {
+                    if let Some(result) = resolution_critical::fast_resolve(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "is-tautology" => {
+                if items.len() == 2 {
+                    if let Some(result) = resolution_critical::fast_is_tautology(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
+            "dedupe" => {
+                if items.len() == 2 {
+                    if let Some(result) = resolution_critical::fast_dedupe(&items[1..]) {
+                        return EvalStep::Done((vec![result], env));
+                    }
+                }
+            }
             _ => {}
         }
     }
